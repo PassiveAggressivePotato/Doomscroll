@@ -220,9 +220,9 @@ export function drawTitle(rend, t) {
   drawText(rend, 'FOR YOUR THUMBS', (W - textW('FOR YOUR THUMBS', 1)) / 2 | 0, H * 0.18 + s * 6 + 14 | 0, 1, YEL);
   // the welcoming committee
   const g0 = SPRITES.grunt.front.idle, z0 = SPRITES.serg.front.idle, b0 = SPRITES.brute.front.idle;
-  rend.blit(g0, W / 2 - 58, H * 0.42 | 0, 2);
-  rend.blit(b0, W / 2 - 26, H * 0.40 | 0, 2);
-  rend.blit(z0, W / 2 + 28, H * 0.42 | 0, 2);
+  rend.blit(g0, W / 2 - 88, H * 0.40 | 0, 1.4);
+  rend.blit(b0, W / 2 - 38, H * 0.365 | 0, 1.4);
+  rend.blit(z0, W / 2 + 24, H * 0.40 | 0, 1.4);
   if ((t * 1.6 | 0) % 2 === 0)
     drawText(rend, 'TAP TO START', (W - textW('TAP TO START', 2)) / 2 | 0, H * 0.72 | 0, 2, GRY);
   const tips = ['RIGHT THUMB: MOVE + TURN', 'LEFT THUMB: FIRE', 'SWIPE BOTTOM BAR: STRAFE', 'SHOOT DOORS TO OPEN THEM'];

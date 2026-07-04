@@ -6,7 +6,7 @@ import { WALLS, FLATS } from './textures.js';
 export const FOV_PLANE = 0.55;      // tan(half-FOV) ≈ 58° horizontal
 const TS = 64;                      // texture size
 const SHADE_LEVELS = 16;
-const WALL_ART_H = 54;              // sprite px that equal one wall height
+const WALL_ART_H = 84;              // sprite px that equal one wall height
 
 // Per-channel shade lookup: SHADE_LUT[level][value]
 const SHADE_LUT = [];
@@ -172,7 +172,7 @@ export class Renderer {
     for (const { s, tx, ty } of list) {
       const pix = s.pix;
       const screenX = (W / 2) * (1 + tx / ty);
-      const hScale = (proj / ty) / WALL_ART_H;      // screen px per art px
+      const hScale = (proj / ty) / WALL_ART_H * (s.scale || 1); // screen px per art px
       const sh = pix.h * hScale, sw = pix.w * hScale;
       const lineH = proj / ty;
       const floorY = horizon + lineH / 2;

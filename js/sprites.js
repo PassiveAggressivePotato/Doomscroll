@@ -1,5 +1,8 @@
 // sprites.js — every sprite in the game, drawn in code in a chunky
-// zombie-soldier pixel style (see /concepts). Deterministic: same art every load.
+// zombie-soldier pixel style (see concept-art/). Deterministic: same art
+// every load. Enemy rig v2: modelled on the detailed reference sheets —
+// 48×72 base canvas, aim/fire poses, 3-frame front walk, 2 pain frames,
+// falling death.
 import { Pix, hex, shade, makeRng } from './px.js';
 
 const OUT = hex('#101010'); // outline colour
@@ -7,196 +10,572 @@ const OUT = hex('#101010'); // outline colour
 // ---------------------------------------------------------------- themes
 export const THEMES = {
   grunt: {
-    skin: hex('#a38a5f'), skinDk: hex('#7d6845'), skinHi: hex('#bda577'),
-    suit: hex('#5c6136'), suitDk: hex('#454a27'), suitHi: hex('#6e7444'),
-    boot: hex('#4a3826'), eyeL: hex('#3fa9f5'), eyeR: hex('#e03a2f'),
-    gun: hex('#3d3f42'), gunDk: hex('#2a2c2e'),
+    skin: hex('#a08256'), skinDk: hex('#7a6240'), skinHi: hex('#bb9c6c'),
+    rot: hex('#6b5334'), wound: hex('#b06b35'),
+    suit: hex('#5b5e3d'), suitDk: hex('#454830'), suitHi: hex('#6d7049'),
+    pant: hex('#525538'), pantDk: hex('#3e412a'),
+    boot: hex('#59422c'), bootDk: hex('#3c2c1d'),
+    eyeL: hex('#3f8fd4'), eyeR: hex('#e02a1f'),
+    gun: hex('#3a3b40'), gunDk: hex('#26272b'), gunHi: hex('#54555b'),
   },
   serg: {
-    skin: hex('#8f7350'), skinDk: hex('#6b543a'), skinHi: hex('#a98c62'),
-    suit: hex('#474d59'), suitDk: hex('#333842'), suitHi: hex('#59606e'),
-    boot: hex('#26221e'), eyeL: hex('#e03a2f'), eyeR: hex('#e03a2f'),
-    gun: hex('#2f3133'), gunDk: hex('#1e2021'),
+    skin: hex('#8f7c5e'), skinDk: hex('#6b5a42'), skinHi: hex('#a8956f'),
+    rot: hex('#5d5040'), wound: hex('#9c5f38'),
+    suit: hex('#494e59'), suitDk: hex('#363a44'), suitHi: hex('#5a6070'),
+    pant: hex('#41454f'), pantDk: hex('#30333c'),
+    boot: hex('#2c2620'), bootDk: hex('#1c1815'),
+    eyeL: hex('#e02a1f'), eyeR: hex('#e02a1f'),
+    gun: hex('#2f3033'), gunDk: hex('#1e1f21'), gunHi: hex('#46474b'),
   },
   brute: {
-    skin: hex('#96412f'), skinDk: hex('#6e2d20'), skinHi: hex('#b65a41'),
-    suit: hex('#4f4a2e'), suitDk: hex('#3a3620'), suitHi: hex('#5f5a3a'),
-    boot: hex('#332a1e'), eyeL: hex('#ffb52e'), eyeR: hex('#ffb52e'),
-    gun: 0, gunDk: 0,
+    skin: hex('#9c4530'), skinDk: hex('#713021'), skinHi: hex('#bd5f45'),
+    rot: hex('#5a2418'), wound: hex('#d47a3a'),
+    suit: hex('#4d4830'), suitDk: hex('#3a3622'), suitHi: hex('#5d5840'),
+    pant: hex('#4d4830'), pantDk: hex('#3a3622'),
+    boot: hex('#332a1e'), bootDk: hex('#221c14'),
+    eyeL: hex('#ffb52e'), eyeR: hex('#ffb52e'),
+    gun: 0, gunDk: 0, gunHi: 0,
   },
 };
 
+// warm muzzle-light: pushes pixels near (cx,cy) toward hot orange
+function warmLight(p, cx, cy, r) {
+  for (let y = 0; y < p.h; y++)
+    for (let x = 0; x < p.w; x++) {
+      const c = p.get(x, y);
+      if (!(c >>> 24)) continue;
+      const d = Math.hypot(x - cx, y - cy);
+      if (d >= r) continue;
+      const f = (1 - d / r) * 0.38;
+      const cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
+      const nr = Math.min(255, cr + (255 - cr) * f) | 0;
+      const ng = Math.min(255, cg + (190 - cg) * f * 0.8) | 0;
+      const nb = (cb * (1 - f * 0.5)) | 0;
+      p.set(x, y, ((c & 0xff000000) | (nb << 16) | (ng << 8) | nr) >>> 0);
+    }
+}
+
 // ------------------------------------------------------- humanoid builder
-// Canvas 32×46 at k=1 (brute uses k≈1.3). dir: 'front'|'back'|'side'.
-// pose: 'idle'|'walk1'|'walk2'|'fire'|'pain'
+// Base canvas 48×72 at k=1 (brute k≈1.3). dir: 'front'|'back'|'side'.
+// pose: 'idle'|'walk1'|'walk2'|'walk3'|'aim'|'fire'|'pain1'|'pain2'
 function humanoid(t, dir, pose, k = 1) {
-  const W = Math.round(32 * k), H = Math.round(46 * k);
-  const p = new Pix(W, H);
+  const p = new Pix(Math.round(48 * k), Math.round(72 * k));
   const R = (x, y, w, h, c) =>
     p.rect(Math.round(x * k), Math.round(y * k), Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), c);
   const E = (x, y, w, h, c) =>
     p.ellipse(x * k, y * k, Math.max(1, w * k), Math.max(1, h * k), c);
+  const PX = (x, y, c) => p.set(Math.round(x * k), Math.round(y * k), c);
+  const LN = (x0, y0, x1, y1, c) =>
+    p.line(Math.round(x0 * k), Math.round(y0 * k), Math.round(x1 * k), Math.round(y1 * k), c);
   const brute = t === THEMES.brute;
-  const pain = pose === 'pain';
-  const lean = pain ? 2 : 0; // px sideways lurch when hurt
+  const cx = 24;
+  const rng = makeRng((dir.length * 131 + pose.length * 17 + (brute ? 5 : 0)) >>> 0);
 
-  // ---- legs (y 28..45)
-  const legW = brute ? 5 : 4;
-  const hipY = 28, bootY = 42;
-  let l1x = 16 - legW - 1, l2x = 17; // front stance
-  let l1y = hipY, l2y = hipY, l1h = bootY - hipY, l2h = bootY - hipY;
-  if (dir === 'side') { l1x = 13 - legW / 2; l2x = 16; }
-  if (pose === 'walk1') {
-    if (dir === 'side') { l1x = 8; l2x = 18; } else { l1y += 1; l1h -= 1; }
-  } else if (pose === 'walk2') {
-    if (dir === 'side') { l1x = 17; l2x = 9; } else { l2y += 1; l2h -= 1; }
+  // ============================================================ LEGS
+  const legW = brute ? 9 : 7;
+  const bootC = t.boot, bootD = t.bootDk;
+  function bootFront(x, y, w = legW + 3) {
+    R(x, y, w, 5, bootC);
+    R(x, y + 4, w, 2, bootD);          // sole
+    R(x, y, w, 1, shade(bootC, 1.2));  // top edge
   }
-  R(l1x + lean, l1y, legW, l1h, t.suitDk);
-  R(l2x + lean, l2y, legW, l2h, t.suit);
-  // trouser wrinkles
-  R(l1x + lean, l1y + 6, legW, 1, shade(t.suitDk, 0.8));
-  R(l2x + lean, l2y + 6, legW, 1, shade(t.suit, 0.8));
-  // boots
-  R(l1x - 1 + lean, l1y + l1h, legW + (dir === 'side' ? 3 : 1), 4, t.boot);
-  R(l2x + lean, l2y + l2h, legW + (dir === 'side' ? 3 : 1), 4, t.boot);
-
-  // ---- torso (y 13..29)
-  const bw = brute ? 18 : dir === 'side' ? 11 : 15;
-  const bx = dir === 'side' ? 10 : 16 - bw / 2;
-  const torso = brute ? t.skin : t.suit;
-  const torsoDk = brute ? t.skinDk : t.suitDk;
-  const torsoHi = brute ? t.skinHi : t.suitHi;
-  R(bx + lean, 13, bw, 16, torso);
-  R(bx + lean, 13, 2, 16, torsoDk); // side shading
-  R(bx + bw - 2 + lean, 13, 2, 16, shade(torso, 0.9));
-  if (!brute) {
-    // jacket details
-    R(bx + lean, 26, bw, 3, torsoDk);              // belt-ish hem
-    R(16 - 1 + lean, 13, brute ? 0 : 1, 12, torsoDk); // zip seam (front/back)
-    if (dir === 'front') {
-      R(bx + 2 + lean, 16, 3, 4, torsoHi);          // chest pocket
-      R(bx + bw - 5 + lean, 16, 3, 4, torsoHi);
+  function legFront(x, y0, y1, c) {
+    R(x, y0, legW, y1 - y0, c);
+    R(x, y0, 2, y1 - y0, shade(c, 0.85));      // inner shade
+    R(x, 53, legW, 1, shade(c, 0.8));          // knee crease
+    if (!brute) R(x + 1, 58 + ((rng() * 3) | 0), 3, 2, t.rot); // grime patch
+  }
+  function legsFrontIdle() {
+    legFront(cx - 9 - Math.round(legW / 4), 44, 65, t.pant);
+    legFront(cx + 2 + Math.round(legW / 4) - (brute ? 2 : 0), 44, 65, shade(t.pant, 0.94));
+    bootFront(cx - 12, 65);
+    bootFront(cx + 2, 65);
+  }
+  function legsFrontWalk(f) {
+    if (f === 0) {           // left leg forward, right trailing
+      legFront(cx - 10, 44, 64, t.pant);
+      bootFront(cx - 12, 64);
+      R(cx + 3, 44, legW, 11, shade(t.pant, 0.9));
+      R(cx + 5, 54, legW - 1, 9, shade(t.pant, 0.85));
+      bootFront(cx + 4, 62, legW + 2);
+    } else if (f === 1) {    // legs passing
+      legFront(cx - 7, 44, 65, t.pant);
+      bootFront(cx - 9, 65);
+      R(cx + 1, 44, legW - 1, 16, shade(t.pant, 0.9));
+      bootFront(cx + 0, 60, legW + 1);
+    } else {                 // right leg forward
+      legFront(cx + 3, 44, 64, shade(t.pant, 0.96));
+      bootFront(cx + 1, 64);
+      R(cx - 10, 44, legW, 11, shade(t.pant, 0.88));
+      R(cx - 12, 54, legW - 1, 9, shade(t.pant, 0.83));
+      bootFront(cx - 13, 62, legW + 2);
     }
-    if (dir === 'back') R(bx + 3 + lean, 15, bw - 6, 1, torsoDk); // yoke seam
-    // collar
-    R(16 - 4 + lean, 12, 8, 2, torsoHi);
-  } else {
-    // brute: bare torso muscle shading + scars
-    R(16 - 5 + lean, 16, 4, 6, torsoHi);
-    R(16 + 1 + lean, 16, 4, 6, torsoHi);
-    R(16 - 5 + lean, 22, 10, 1, torsoDk);
-    R(bx + 3 + lean, 14, 1, 8, hex('#5a1f14')); // scar
-    R(16 - 8 + lean, 28, 16, 2, t.suitDk);      // trouser waist
+  }
+  function legsSide(f) { // f: -1 idle, 0/1 walk
+    if (f < 0) {
+      R(cx - 5, 42, 6, 23, t.pant);
+      R(cx + 1, 42, 6, 22, shade(t.pant, 0.88));
+      R(cx - 9, 65, 11, 5, bootC); R(cx - 9, 69, 11, 2, bootD);
+      R(cx + 1, 64, 10, 5, shade(bootC, 0.9)); R(cx + 1, 68, 10, 2, bootD);
+    } else if (f === 0) {  // full stride
+      R(cx - 6, 42, 7, 8, t.pant);
+      R(cx - 10, 49, 7, 8, t.pant);
+      R(cx - 13, 56, 6, 7, t.pant);
+      R(cx - 18, 62, 11, 5, bootC); R(cx - 18, 66, 11, 2, bootD);
+      R(cx + 1, 42, 7, 8, shade(t.pant, 0.88));
+      R(cx + 4, 49, 7, 8, shade(t.pant, 0.85));
+      R(cx + 7, 55, 6, 7, shade(t.pant, 0.85));
+      R(cx + 8, 60, 10, 5, shade(bootC, 0.9));  // heel raised
+      R(cx + 10, 64, 9, 2, bootD);
+    } else {               // legs passing
+      R(cx - 4, 42, 6, 23, t.pant);
+      R(cx - 8, 64, 11, 5, bootC); R(cx - 8, 68, 11, 2, bootD);
+      R(cx + 1, 42, 6, 11, shade(t.pant, 0.88));
+      R(cx + 3, 52, 6, 8, shade(t.pant, 0.85));
+      R(cx + 4, 58, 9, 5, shade(bootC, 0.9)); R(cx + 6, 62, 8, 2, bootD);
+    }
   }
 
-  // ---- arms + weapon
-  const armC = brute ? t.skin : t.suit;
-  if (pose === 'fire' && dir === 'front') {
+  // ============================================================ TORSO
+  function torsoFront(back = false) {
+    const w = brute ? 26 : 20, x0 = cx - w / 2;
     if (brute) {
-      // hurling arm raised, fireball glow drawn by fx layer in-game
-      R(bx - 3 + lean, 8, 4, 12, armC);
-      R(bx - 3 + lean, 6, 4, 3, t.skinHi); // fist up
-      R(bx + bw - 1 + lean, 15, 4, 10, shade(armC, 0.85));
+      R(x0, 18, w, 24, t.skin);
+      R(x0, 18, 3, 24, t.skinDk);
+      R(x0 + w - 3, 18, 3, 24, shade(t.skin, 0.88));
+      if (!back) {
+        R(cx - 10, 18, 20, 2, t.skinDk);            // traps
+        R(cx - 9, 22, 8, 6, t.skinHi);              // pecs
+        R(cx + 1, 22, 8, 6, t.skinHi);
+        R(cx - 1, 21, 1, 9, t.skinDk);              // sternum
+        R(cx - 9, 27, 18, 1, shade(t.skin, 0.8));
+        for (const yy of [31, 34, 37]) R(cx - 5, yy, 10, 1, shade(t.skin, 0.82)); // abs
+        R(cx - 3, 31, 2, 7, t.skinHi); R(cx + 1, 31, 2, 7, t.skinHi);
+        LN(x0 + 3, 20, x0 + 4, 30, hex('#5a1f14'));  // scar
+      } else {
+        R(cx - 1, 20, 2, 20, t.skinDk);             // spine
+        R(cx - 10, 22, 8, 6, shade(t.skin, 0.92));  // shoulder blades
+        R(cx + 2, 22, 8, 6, shade(t.skin, 0.92));
+      }
+      R(cx - 13, 42, 26, 3, t.pantDk);               // waistband
+      return;
+    }
+    R(x0, 20, w, 22, t.suit);
+    R(x0, 19, 5, 3, t.suit); R(x0 + w - 5, 19, 5, 3, t.suit); // shoulders
+    R(x0, 20, 2, 22, t.suitDk);
+    R(x0 + w - 2, 20, 2, 22, shade(t.suit, 0.9));
+    if (!back) {
+      // collar + lapels
+      R(cx - 5, 18, 10, 2, t.suitHi);
+      LN(cx - 5, 19, cx - 2, 24, t.suitDk);
+      LN(cx + 4, 19, cx + 1, 24, t.suitDk);
+      // button placket
+      R(cx - 1, 22, 1, 19, t.suitDk);
+      for (const yy of [26, 32, 38]) PX(cx, yy, t.suitDk);
+      // chest pockets
+      R(x0 + 2, 27, 5, 4, shade(t.suit, 1.06));
+      R(x0 + 2, 27, 5, 1, t.suitHi);
+      R(x0 + 2, 30, 5, 1, t.suitDk);
+      R(x0 + w - 7, 27, 5, 4, shade(t.suit, 1.06));
+      R(x0 + w - 7, 27, 5, 1, t.suitHi);
+      R(x0 + w - 7, 30, 5, 1, t.suitDk);
+      // rot & wounds like the reference: orange shoulder patch, red sore
+      E(x0 + 1, 21, 4, 3, t.wound);
+      PX(x0 + w - 4, 34, hex('#8f1a12'));
+      PX(x0 + 3, 37, t.rot);
     } else {
-      // rifle levelled at the player: horizontal gun + hands
-      R(6 + lean, 17, 20, 3, t.gun);
-      R(6 + lean, 17, 20, 1, shade(t.gun, 1.3));
-      R(14 + lean, 20, 4, 3, t.gunDk);          // mag
-      R(9 + lean, 20, 3, 2, t.skin);            // hands
-      R(20 + lean, 20, 3, 2, t.skin);
-      // muzzle flash
-      E(1 + lean, 14, 7, 8, hex('#ff9d2e'));
-      E(2.5 + lean, 16, 4, 4, hex('#ffe86b'));
+      R(x0 + 1, 21, w - 2, 1, t.suitDk);            // yoke seam
+      E(cx - 5, 25, 10, 10, shade(t.suit, 0.74));   // big rot stain
+      LN(x0 + w - 4, 19, x0 + 3, 41, t.gunDk);      // sling strap
+      // slung rifle poking over the right shoulder
+      R(cx + 7, 9, 3, 4, t.gunDk);
+      R(cx + 6, 12, 3, 5, t.gun);
+      R(cx + 5, 16, 2, 4, t.gunDk);
+      PX(x0 + 4, 24, t.wound); PX(x0 + w - 6, 33, hex('#8f1a12'));
     }
-  } else if (dir === 'side') {
-    R(12 + lean, 14, 4, 10, shade(armC, 0.95));
-    if (!brute) {
-      // rifle held level, pointing forward (left)
-      R(2, 18, 18, 2, t.gun);
-      R(6, 20, 3, 3, t.gunDk);
-      R(10, 20, 3, 2, t.skin);
+    // waist + jacket skirt
+    R(x0, 40, w, 2, t.suitDk);
+    R(x0, 42, w, 3, shade(t.suit, 0.95));
+    PX(cx, 43, t.suitDk);
+  }
+  function torsoSide() {
+    if (brute) {
+      R(cx - 8, 18, 16, 24, t.skin);
+      R(cx + 5, 18, 3, 24, t.skinDk);
+      R(cx - 7, 22, 5, 8, t.skinHi);                 // chest
+      R(cx - 13, 42, 22, 3, t.pantDk);
+      return;
     }
-  } else {
-    // idle/walk/pain, front & back: arms down, rifle across chest (front)
-    R(bx - 3 + lean, 14, 4, 12, shade(armC, 0.95));
-    R(bx + bw - 1 + lean, 14, 4, 12, shade(armC, 0.9));
-    R(bx - 3 + lean, 25, 4, 3, t.skin);  // hands
-    R(bx + bw - 1 + lean, 25, 4, 3, t.skin);
-    if (!brute && dir === 'front') {
-      // rifle diagonal across chest
-      p.line(Math.round((bx - 1 + lean) * k), Math.round(25 * k),
-             Math.round((bx + bw + 1 + lean) * k), Math.round(16 * k), t.gun);
-      p.line(Math.round((bx - 1 + lean) * k), Math.round(26 * k),
-             Math.round((bx + bw + 1 + lean) * k), Math.round(17 * k), t.gunDk);
-    }
-    if (!brute && dir === 'back') R(bx + 1 + lean, 14, 2, 12, t.gunDk); // slung barrel
+    R(cx - 7, 18, 14, 22, t.suit);
+    R(cx - 8, 22, 1, 10, t.suit);                    // chest bulge
+    R(cx + 5, 18, 2, 22, t.suitDk);                  // back shade
+    R(cx - 7, 38, 14, 2, t.suitDk);
+    R(cx - 7, 40, 14, 3, shade(t.suit, 0.95));       // skirt
+    R(cx + 0, 31, 5, 5, shade(t.suit, 0.9));         // hip pouch
+    R(cx + 0, 31, 5, 1, t.suitDk);
+    E(cx - 5, 21, 4, 3, t.wound);                    // shoulder rot
+    PX(cx + 2, 27, hex('#8f1a12'));
   }
 
-  // ---- head (y 2..13)
-  const hw = brute ? 12 : 10;
-  const hx = (dir === 'side' ? 11 : 16 - hw / 2) + lean + (pain ? 1 : 0);
-  R(hx, 2, hw, 11, t.skin);
-  R(hx, 2, hw, 2, t.skinDk);                    // scalp shadow
-  R(hx, 2, 1, 11, t.skinDk);
-  R(hx + hw - 2, 4, 2, 8, shade(t.skin, 0.9));
-  if (dir === 'front') {
-    // zombie face
-    const ey = pain ? 7 : 6;
-    R(hx + 2, ey, 2, 2, t.eyeL);
-    R(hx + hw - 4, ey, 2, 2, t.eyeR);
-    R(hx + 2, ey - 1, hw - 4, 1, t.skinDk);     // brow
-    R(hx + 3, 10, hw - 6, pain ? 3 : 2, hex('#3a241c')); // mouth
-    if (pain) R(hx + 3, 10, hw - 6, 1, hex('#e8e2c8')); // bared teeth
-    R(hx + 1, 9, 1, 2, t.skinDk);               // gaunt cheeks
-    R(hx + hw - 2, 9, 1, 2, t.skinDk);
-    if (brute) { R(hx + 2, ey, 3, 2, t.eyeL); R(hx + hw - 5, ey, 3, 2, t.eyeR); }
-  } else if (dir === 'side') {
-    R(hx + hw - 1, 6, 2, 3, t.skin);            // nose
-    R(hx + hw - 4, 6, 2, 2, t.eyeR);            // one eye
-    R(hx + hw - 5, 10, 4, 1, hex('#3a241c'));   // mouth
-  } else {
-    R(hx + 2, 4, hw - 4, 6, t.skinDk);          // back of skull mottling
-    R(hx + hw / 2, 4, 1, 7, shade(t.skinDk, 0.8)); // scar seam
+  // ============================================================ HEAD
+  function headFront(ox = 0, oy = 0, expr = 'calm') {
+    const hw = brute ? 16 : 12;
+    const x0 = cx - hw / 2 + ox;
+    R(x0 + 1, 2 + oy, hw - 2, 2, shade(t.skin, 0.95)); // crown
+    R(x0, 4 + oy, hw, 10, t.skin);
+    R(x0 + 2, 14 + oy, hw - 4, 3, t.skin);             // jaw
+    R(x0, 4 + oy, 1, 10, t.skinDk);
+    R(x0 + hw - 2, 5 + oy, 2, 9, shade(t.skin, 0.88));
+    R(x0 + 1, 2 + oy, hw - 2, 1, t.skinDk);            // scalp mottle
+    PX(x0 + 3, 3 + oy, t.rot); PX(x0 + hw - 4, 2 + oy, t.rot);
+    LN(x0 + hw - 3, 3 + oy, x0 + hw - 5, 7 + oy, t.rot); // scalp scar
+    // brow
+    R(x0 + 2, 7 + oy, hw - 4, 1, t.skinDk);
+    // eye sockets + heterochromia
+    const eyeY = 8 + oy;
+    R(x0 + 3, eyeY, 3, 2, hex('#3a2f22'));
+    R(x0 + hw - 6, eyeY, 3, 2, hex('#3a2f22'));
+    R(x0 + 3, eyeY, 2, 2, t.eyeL);
+    PX(x0 + 3, eyeY, shade(t.eyeL, 1.4));
+    R(x0 + hw - 5, eyeY, 2, 2, t.eyeR);
+    PX(x0 + hw - 4, eyeY, shade(t.eyeR, 1.5));
+    // sunken cheeks + nose
+    R(x0, 11 + oy, 1, 2, t.skinDk);
+    R(x0 + hw - 1, 11 + oy, 1, 2, t.skinDk);
+    R(cx - 1 + ox, 10 + oy, 2, 2, t.skinDk);
+    // mouth
+    const my = 13 + oy;
+    if (expr === 'grimace') {
+      R(x0 + 4, my, hw - 8, 2, hex('#3a241c'));
+      for (let i = 0; i < hw - 8; i += 2) PX(x0 + 4 + i, my, hex('#d8d2c0'));
+    } else if (expr === 'agape') {
+      R(x0 + 4, my, hw - 8, 3, hex('#2c1712'));
+      PX(x0 + 4, my, hex('#d8d2c0')); PX(x0 + hw - 6, my, hex('#d8d2c0'));
+    } else {
+      R(x0 + 4, my, hw - 8, 1, hex('#3a241c'));
+      PX(x0 + 5, my, hex('#c9c3b0'));
+    }
+    // round the skull corners
+    PX(x0, 4 + oy, 0); PX(x0 + hw - 1, 4 + oy, 0);
+    PX(x0 + 1, 2 + oy, 0); PX(x0 + hw - 2, 2 + oy, 0);
+    PX(x0 + hw - 4, my + 2, hex('#8f1a12'));           // blood dribble
+    // neck
+    R(cx - 3 + ox, 17 + oy, 6, 2, t.skin);
+    R(cx + 1 + ox, 17 + oy, 2, 2, t.skinDk);
+    if (brute) { // heavier brow, glowing eyes
+      R(x0 + 2, 7 + oy, hw - 4, 1, shade(t.skinDk, 0.8));
+      R(x0 + 2, eyeY, 3, 2, t.eyeL); R(x0 + hw - 5, eyeY, 3, 2, t.eyeR);
+    }
   }
-  // rot patches
-  const rng = makeRng((dir.length * 31 + pose.length * 7 + (brute ? 5 : 0)) >>> 0);
-  p.speckle(Math.round(hx * k), Math.round(3 * k), Math.round(hw * k), Math.round(9 * k), t.skinDk, 0.12, rng);
-  p.speckle(0, Math.round(13 * k), W, Math.round(16 * k), shade(torso, 0.85), 0.08, rng);
+  function headSide() {
+    R(cx - 6, 2, 11, 2, shade(t.skin, 0.95));
+    R(cx - 7, 4, 14, 10, t.skin);
+    R(cx - 6, 14, 9, 3, t.skin);                      // jaw
+    R(cx + 5, 4, 2, 10, shade(t.skin, 0.88));         // back of skull
+    R(cx - 9, 8, 2, 3, t.skin);                       // nose
+    PX(cx - 9, 10, t.skinDk);
+    R(cx - 6, 7, 4, 1, t.skinDk);                     // brow
+    R(cx - 5, 8, 2, 2, t.eyeL);                       // visible eye
+    PX(cx - 5, 8, shade(t.eyeL, 1.4));
+    PX(cx + 6, 8, t.eyeR);                            // rear glow
+    R(cx + 1, 9, 2, 3, t.skinDk);                     // ear
+    R(cx - 7, 12, 4, 1, hex('#3a241c'));              // mouth
+    PX(cx - 7, 13, hex('#8f1a12'));
+    PX(cx - 1, 3, t.rot); LN(cx + 2, 3, cx + 4, 6, t.rot);
+    R(cx - 2, 16, 5, 3, t.skin);                      // neck
+  }
+  function headBack() {
+    const hw = brute ? 16 : 12;
+    const x0 = cx - hw / 2;
+    R(x0 + 1, 2, hw - 2, 2, shade(t.skin, 0.92));
+    R(x0, 4, hw, 12, t.skin);
+    R(x0 + 2, 16, hw - 4, 2, t.skin);
+    R(x0, 4, 2, 12, t.skinDk);
+    p.speckle(Math.round(x0 * k), Math.round(3 * k), Math.round(hw * k), Math.round(11 * k), t.skinDk, 0.2, rng);
+    LN(x0 + 3, 4, x0 + hw - 4, 12, shade(t.skinDk, 0.8)); // scar seam
+    PX(x0, 8, shade(t.eyeR, 1.4));                     // eye glow past the edge
+    PX(x0, 9, t.eyeR);
+    R(cx - 3, 16, 6, 3, t.skinDk);                     // neck shadow
+  }
+
+  // ============================================================ ARMS + GUN
+  const armC = brute ? t.skin : t.suit;
+  const armW = brute ? 6 : 4;
+  function armHang(x, tone) {
+    R(x, 20, armW, 8, tone);
+    R(x - (x < cx ? 1 : -1), 27, armW, 8, tone);
+    R(x - (x < cx ? 1 : -1), 34, armW, 1, shade(tone, 0.8));   // cuff
+    R(x - (x < cx ? 1 : -1), 35, armW, 5, t.skin);             // hand
+    R(x - (x < cx ? 1 : -1), 37, armW, 1, shade(t.skin, 0.8)); // knuckles
+  }
+  function gunIdleFront() {
+    // rifle in the viewer-left hand, muzzle down-left, chunky like the ref
+    LN(17, 34, 6, 57, t.gun); LN(18, 34, 7, 57, t.gun);
+    LN(16, 34, 5, 57, t.gunDk); LN(16, 35, 5, 58, t.gunDk);
+    LN(18, 33, 9, 51, t.gunHi);
+    R(15, 31, 4, 5, t.gunDk);              // receiver
+    R(16, 30, 3, 2, t.gun);                // rear sight nub
+    R(10, 44, 4, 5, t.gunDk);              // mag
+    PX(11, 49, t.gunDk);
+    R(4, 57, 3, 3, t.gunDk);               // muzzle
+  }
+  function gunReadyFront() {
+    R(14, 30, 20, 3, t.gun);
+    R(14, 29, 20, 1, t.gunHi);
+    R(18, 27, 8, 2, t.gun);                // rear sight / carry rail
+    R(8, 30, 6, 2, t.gun);                 // barrel
+    PX(8, 28, t.gun); PX(8, 29, t.gun);    // front sight
+    PX(7, 30, t.gunDk);
+    R(34, 30, 4, 3, t.gunDk);              // stock
+    R(37, 29, 3, 4, t.gunDk);
+    R(22, 33, 4, 5, t.gunDk);              // mag
+    PX(23, 38, t.gunDk);
+    R(28, 33, 3, 3, t.gunDk);              // grip
+  }
+  function armsReadyFront() {
+    R(10, 20, armW, 6, shade(armC, 0.95));
+    R(11, 25, armW, 5, shade(armC, 0.95));
+    R(13, 29, 3, 3, shade(armC, 0.95));
+    R(34, 20, armW, 6, shade(armC, 0.9));
+    R(33, 25, armW, 5, shade(armC, 0.9));
+    R(30, 29, 3, 3, shade(armC, 0.9));
+    R(15, 31, 4, 3, t.skin);               // fore hand
+    R(27, 32, 3, 3, t.skin);               // grip hand
+  }
+  function armsAimFront(fire) {
+    // gun pointed straight at the viewer
+    R(21, 25, 6, 14, t.gun);
+    R(21, 25, 2, 14, t.gunHi);
+    R(20, 18, 8, 8, t.gunDk);              // muzzle block
+    R(20, 18, 8, 1, t.gunHi);
+    R(21, 19, 6, 6, hex('#5a5c62'));       // muzzle ring
+    R(22, 20, 4, 4, hex('#0e0f10'));       // bore
+    // sleeves funnel to the centre
+    R(10, 20, armW, 7, shade(armC, 0.95));
+    R(12, 26, armW, 6, shade(armC, 0.95));
+    R(15, 32, 3, 4, shade(armC, 0.95));
+    R(34, 20, armW, 7, shade(armC, 0.9));
+    R(32, 26, armW, 6, shade(armC, 0.9));
+    R(29, 32, 3, 4, shade(armC, 0.9));
+    // clasped hands under the muzzle
+    R(17, 36, 8, 6, t.skin);
+    R(24, 38, 6, 6, t.skinDk);
+    for (let i = 0; i < 3; i++) PX(19 + i * 3, 39, shade(t.skin, 0.75));
+    PX(18, 35, hex('#8f1a12'));            // knuckle wounds like the ref
+    PX(27, 37, hex('#8f1a12'));
+    if (fire) {
+      // compact starburst at the muzzle
+      LN(24, 11, 24, 15, hex('#ffd24a'));
+      LN(17, 20, 20, 20, hex('#ffd24a'));
+      LN(28, 20, 31, 20, hex('#ffd24a'));
+      LN(19, 14, 21, 17, hex('#ff9d2e'));
+      LN(29, 14, 27, 17, hex('#ff9d2e'));
+      LN(19, 26, 21, 23, hex('#ff9d2e'));
+      LN(29, 26, 27, 23, hex('#ff9d2e'));
+      E(20, 16, 9, 8, hex('#ffe86b'));
+      E(22, 18, 5, 4, hex('#fffdf0'));
+      PX(33, 15, hex('#ffb03a')); PX(15, 24, hex('#ffb03a'));
+      PX(33, 28, hex('#c8a13c'));          // ejected shell
+    }
+  }
+  function armsGunSide() {
+    // rifle level, pointing left
+    R(2, 28, 16, 2, t.gun);
+    R(2, 28, 16, 1, t.gunHi);
+    PX(2, 26, t.gun); PX(2, 27, t.gun);    // front sight
+    PX(1, 28, t.gunDk);
+    R(18, 26, 10, 5, t.gun);               // receiver
+    R(18, 26, 10, 1, t.gunHi);
+    R(28, 27, 4, 4, t.gunDk);              // stock
+    R(31, 28, 3, 3, t.gunDk);
+    R(20, 31, 4, 5, t.gunDk);              // mag
+    PX(21, 36, t.gunDk);
+    // near arm reaching forward
+    R(21, 20, 5, 5, shade(armC, 0.95));
+    R(17, 24, 5, 4, shade(armC, 0.95));
+    R(13, 27, 4, 3, shade(armC, 0.95));
+    R(10, 29, 4, 3, t.skin);               // fore hand
+    R(24, 30, 3, 3, t.skin);               // grip hand
+    E(21, 20, 4, 3, t.wound);              // shoulder rot patch
+  }
+  function bruteArms(mode) {
+    if (mode === 'aim') {         // winding up overhead
+      R(cx + 11, 8, 6, 12, t.skin);
+      R(cx + 12, 4, 6, 6, t.skinHi);       // fist up high
+      E(cx + 10, 1, 10, 8, hex('#ff8c1e'));
+      E(cx + 12, 2.5, 6, 5, hex('#ffe27a'));
+      R(cx - 16, 20, 6, 14, shade(t.skin, 0.9));
+      R(cx - 17, 33, 6, 5, t.skinDk);
+    } else if (mode === 'fire') { // hurling forward
+      R(cx + 12, 22, 10, 6, t.skin);
+      R(cx + 21, 21, 5, 6, t.skinHi);      // extended fist
+      E(cx + 22, 17, 9, 7, hex('#ff8c1e'));
+      R(cx - 16, 20, 6, 14, shade(t.skin, 0.9));
+      R(cx - 17, 33, 6, 5, t.skinDk);
+    } else {
+      R(cx - 17, 19, 6, 10, shade(t.skin, 0.95));
+      R(cx - 18, 28, 6, 9, shade(t.skin, 0.9));
+      R(cx - 18, 36, 6, 6, t.skinDk);      // fist
+      R(cx + 11, 19, 6, 10, shade(t.skin, 0.9));
+      R(cx + 12, 28, 6, 9, shade(t.skin, 0.85));
+      R(cx + 12, 36, 6, 6, t.skinDk);
+    }
+  }
+
+  // ============================================================ COMPOSE
+  const pain = pose === 'pain1' || pose === 'pain2';
+  if (dir === 'side') {
+    legsSide(pose === 'walk1' ? 0 : pose === 'walk2' ? 1 : -1);
+    torsoSide();
+    headSide();
+    if (!brute) armsGunSide();
+    else { R(cx - 12, 20, 6, 16, shade(t.skin, 0.95)); R(cx - 13, 35, 6, 6, t.skinDk); }
+  } else if (dir === 'back') {
+    if (pose === 'walk1') legsFrontWalk(0);
+    else if (pose === 'walk2') legsFrontWalk(2);
+    else legsFrontIdle();
+    torsoFront(true);
+    armHang(brute ? cx - 17 : 10, shade(armC, 0.92));
+    armHang(brute ? cx + 11 : 34, shade(armC, 0.88));
+    headBack();
+  } else {
+    // front
+    if (pose === 'idle' || pose === 'aim' || pose === 'fire' || pain) legsFrontIdle();
+    else legsFrontWalk(pose === 'walk1' ? 0 : pose === 'walk2' ? 1 : 2);
+    torsoFront(false);
+    if (brute) {
+      bruteArms(pose === 'aim' ? 'aim' : pose === 'fire' ? 'fire' : 'idle');
+      headFront(0, 0, pose === 'fire' || pain ? 'agape' : 'calm');
+    } else if (pose === 'idle') {
+      armHang(10, shade(armC, 0.95));
+      armHang(34, shade(armC, 0.9));
+      gunIdleFront();
+      headFront(0, 0, 'calm');
+    } else if (pose === 'walk1' || pose === 'walk2' || pose === 'walk3') {
+      gunReadyFront();
+      armsReadyFront();
+      headFront(0, 0, 'grimace');
+    } else if (pose === 'aim' || pose === 'fire') {
+      headFront(0, 0, pose === 'fire' ? 'agape' : 'calm');
+      armsAimFront(pose === 'fire');
+    } else if (pose === 'pain1') {
+      // right hand drops the rifle low, left clutches the chest
+      LN(32, 36, 41, 53, t.gun); LN(33, 36, 42, 53, t.gunDk);
+      R(36, 43, 3, 4, t.gunDk);
+      armHang(34, shade(armC, 0.9));
+      R(10, 20, armW, 6, shade(armC, 0.95));
+      R(12, 25, armW, 5, shade(armC, 0.95));
+      R(17, 27, 6, 5, t.skin);             // clutching hand
+      headFront(0, 0, 'grimace');
+      // blood burst
+      R(23, 26, 3, 7, hex('#c22417'));
+      R(21, 28, 8, 3, hex('#c22417'));
+      PX(28, 26, hex('#8f1a12')); PX(20, 32, hex('#8f1a12'));
+      PX(25, 34, hex('#8f1a12')); PX(25, 36, hex('#8f1a12'));
+    } else if (pose === 'pain2') {
+      // doubled over, hand to head, gun gone
+      R(10, 20, armW, 6, shade(armC, 0.95));
+      R(12, 25, armW, 5, shade(armC, 0.95));
+      R(16, 28, 6, 5, t.skin);
+      R(33, 15, armW, 6, shade(armC, 0.9));  // arm up
+      R(30, 11, armW, 5, shade(armC, 0.9));
+      R(26, 8, 5, 4, t.skin);                // hand on scalp
+      headFront(-2, 3, 'agape');
+      R(21, 29, 3, 8, hex('#c22417'));
+      R(19, 31, 8, 3, hex('#c22417'));
+      PX(29, 28, hex('#8f1a12')); PX(32, 27, hex('#8f1a12'));
+      PX(34, 30, hex('#8f1a12')); PX(27, 38, hex('#8f1a12'));
+      PX(27, 41, hex('#8f1a12'));
+    }
+  }
+
+  // grime pass
+  p.speckle(0, Math.round(18 * k), p.w, Math.round(26 * k), shade(brute ? t.skin : t.suit, 0.85), 0.07, rng);
+  p.speckle(0, Math.round(44 * k), p.w, Math.round(20 * k), t.pantDk, 0.07, rng);
+
+  if (pose === 'fire' && !brute && dir === 'front')
+    warmLight(p, Math.round(24 * k), Math.round(19 * k), Math.round(22 * k));
 
   p.rimShade(0.72);
   p.outline(OUT);
   return p;
 }
 
+// -------------------------------------------------- death frames (2)
 function corpseFrames(t, k = 1) {
-  const W = Math.round(34 * k), H = Math.round(46 * k);
   const brute = t === THEMES.brute;
   const body = brute ? t.skin : t.suit;
-  // frame 1: crumpling — knees buckled, torso pitched forward
+  const W = Math.round(72 * k), H = Math.round(72 * k);
+
+  // frame 1: blown backwards, mid-fall
   const f1 = new Pix(W, H);
   {
-    const R = (x, y, w, h, c) => f1.rect(x * k, y * k, Math.max(1, w * k), Math.max(1, h * k), c);
-    R(10, 34, 5, 8, t.suitDk); R(18, 34, 5, 8, t.suit);       // folded legs
-    R(9, 42, 7, 3, t.boot); R(18, 42, 7, 3, t.boot);
-    R(9, 22, 15, 13, body); R(9, 22, 15, 2, shade(body, 1.15));
-    R(11, 14, 10, 10, t.skin);                                 // slumped head
-    R(13, 19, 2, 2, hex('#3a241c')); R(18, 19, 2, 2, hex('#3a241c'));
-    R(12, 26, 3, 6, hex('#7a1710'));                           // chest wound
-    f1.rimShade(0.72); f1.outline(OUT);
+    const R = (x, y, w, h, c) => f1.rect(Math.round(x * k), Math.round(y * k), Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), c);
+    const PX = (x, y, c) => f1.set(Math.round(x * k), Math.round(y * k), c);
+    R(12, 68, 48, 2, hex('#2e2e2c'));                    // ground shadow
+    // extended leg, low left
+    R(8, 46, 15, 6, t.pant);
+    R(2, 44, 7, 7, t.boot); R(2, 50, 7, 2, t.bootDk);
+    // hip joining leg to torso
+    R(21, 45, 8, 9, shade(t.pant, 0.92));
+    // bent leg tucked under
+    R(22, 52, 9, 6, shade(t.pant, 0.9));
+    R(19, 56, 7, 8, shade(t.pant, 0.85));
+    R(15, 62, 9, 6, t.boot); R(15, 66, 9, 2, t.bootDk);
+    // torso arcing down to the right
+    R(27, 42, 11, 12, body);
+    R(35, 45, 10, 12, shade(body, 0.94));
+    R(43, 48, 9, 10, shade(body, 0.88));
+    // chest wound
+    R(33, 45, 4, 6, hex('#c22417'));
+    R(31, 47, 8, 3, hex('#c22417'));
+    PX(38, 44, hex('#8f1a12')); PX(30, 52, hex('#8f1a12'));
+    PX(36, 55, hex('#8f1a12')); PX(36, 58, hex('#8f1a12'));
+    // arm flung up, attached at the shoulder
+    R(41, 40, 5, 9, shade(body, 0.9));
+    R(42, 34, 5, 7, shade(body, 0.9));
+    R(43, 30, 5, 4, t.skin);
+    // head, low right, lolling
+    R(50, 48, 11, 10, t.skin);
+    R(50, 48, 11, 2, t.skinDk);
+    PX(53, 52, t.eyeL); PX(57, 52, t.eyeR);
+    R(52, 55, 6, 1, hex('#3a241c'));
+    PX(58, 56, hex('#8f1a12'));
+    f1.rimShade(0.75); f1.outline(OUT);
   }
-  // frame 2: down — lying flat in a blood pool
+
+  // frame 2: face-up corpse in a spreading pool
   const f2 = new Pix(W, H);
   {
-    const R = (x, y, w, h, c) => f2.rect(x * k, y * k, Math.max(1, w * k), Math.max(1, h * k), c);
-    f2.ellipse(2 * k, 38 * k, 30 * k, 7 * k, hex('#6e120c'));
-    f2.ellipse(5 * k, 39 * k, 22 * k, 5 * k, hex('#8f1a12'));
-    R(4, 36, 9, 7, t.skin);                                    // head on its side
-    R(6, 38, 2, 2, hex('#3a241c'));
-    R(13, 36, 14, 7, body); R(13, 36, 14, 2, shade(body, 1.12));
-    R(26, 37, 6, 4, t.suitDk);                                 // legs
-    R(30, 37, 3, 4, t.boot);
-    if (!brute) { R(15, 33, 12, 2, t.gun); }                   // dropped rifle
-    f2.rimShade(0.75); f2.outline(OUT);
+    const R = (x, y, w, h, c) => f2.rect(Math.round(x * k), Math.round(y * k), Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), c);
+    const E = (x, y, w, h, c) => f2.ellipse(x * k, y * k, Math.max(1, w * k), Math.max(1, h * k), c);
+    const PX = (x, y, c) => f2.set(Math.round(x * k), Math.round(y * k), c);
+    E(6, 56, 60, 15, hex('#6e120c'));
+    E(13, 59, 46, 10, hex('#8f1a12'));
+    PX(9, 55, hex('#6e120c')); PX(64, 60, hex('#6e120c'));
+    PX(20, 70, hex('#6e120c'));
+    // boots left
+    R(4, 50, 9, 5, t.boot); R(4, 54, 9, 1, t.bootDk);
+    R(7, 55, 9, 5, shade(t.boot, 0.9)); R(7, 59, 9, 1, t.bootDk);
+    // legs
+    R(13, 50, 17, 7, t.pant);
+    R(13, 53, 17, 1, shade(t.pant, 0.8));
+    // torso
+    R(28, 46, 22, 12, body);
+    R(28, 46, 22, 2, shade(body, 1.12));
+    R(34, 50, 6, 6, hex('#8f1a12'));                  // soaked wound
+    // arm draped forward
+    R(36, 56, 13, 4, shade(body, 0.9));
+    R(48, 57, 4, 3, t.skin);
+    // head, right, face to camera
+    R(50, 44, 12, 12, t.skin);
+    R(50, 44, 12, 2, t.skinDk);
+    R(50, 44, 2, 12, t.skinDk);
+    PX(54, 48, t.eyeL); PX(53, 48, shade(t.eyeL, 1.3));
+    PX(58, 48, t.eyeR); PX(59, 48, shade(t.eyeR, 1.3));
+    R(53, 52, 6, 1, hex('#8a8f92'));                  // slack grey mouth
+    PX(59, 53, hex('#8f1a12')); PX(59, 54, hex('#8f1a12'));
+    f2.rimShade(0.78); f2.outline(OUT);
   }
   return [f1, f2];
 }
@@ -457,17 +836,22 @@ export const FP = {};
 export const FACES = {};
 
 function buildActor(t, k) {
-  const dirs = {};
-  for (const d of ['front', 'back', 'side']) {
-    dirs[d] = {
-      idle: humanoid(t, d, 'idle', k),
-      walk: [humanoid(t, d, 'walk1', k), humanoid(t, d, 'walk2', k)],
-    };
-  }
   return {
-    ...dirs,
+    front: {
+      idle: humanoid(t, 'front', 'idle', k),
+      walk: [humanoid(t, 'front', 'walk1', k), humanoid(t, 'front', 'walk2', k), humanoid(t, 'front', 'walk3', k)],
+    },
+    side: {
+      idle: humanoid(t, 'side', 'idle', k),
+      walk: [humanoid(t, 'side', 'walk1', k), humanoid(t, 'side', 'walk2', k)],
+    },
+    back: {
+      idle: humanoid(t, 'back', 'idle', k),
+      walk: [humanoid(t, 'back', 'walk1', k), humanoid(t, 'back', 'walk2', k)],
+    },
+    aim: humanoid(t, 'front', 'aim', k),
     fire: humanoid(t, 'front', 'fire', k),
-    pain: humanoid(t, 'front', 'pain', k),
+    pain: [humanoid(t, 'front', 'pain1', k), humanoid(t, 'front', 'pain2', k)],
     death: corpseFrames(t, k),
   };
 }

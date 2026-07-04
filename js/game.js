@@ -487,21 +487,21 @@ export class Game {
     const out = [];
     for (const it of this.items) {
       if (it.taken) continue;
-      out.push({ x: it.x, y: it.y, pix: SPRITES.items[it.kind], anchor: 'floor' });
+      out.push({ x: it.x, y: it.y, pix: SPRITES.items[it.kind], anchor: 'floor', scale: 1.55 });
     }
     for (const b of this.barrels)
-      if (!b.dead) out.push({ x: b.x, y: b.y, pix: SPRITES.items.barrel, anchor: 'floor' });
+      if (!b.dead) out.push({ x: b.x, y: b.y, pix: SPRITES.items.barrel, anchor: 'floor', scale: 1.55 });
     for (const e of this.enemies) {
       const art = SPRITES[e.T.art];
       let pix, flip = false, bright = false;
       if (e.state === 'dead') {
         pix = e.deadT < 0.35 ? art.death[0] : art.death[1];
       } else if (e.state === 'pain') {
-        pix = art.pain;
+        pix = art.pain[e.t > 0.16 ? 0 : 1];
       } else if (e.state === 'shoot') {
         pix = art.fire; bright = e.t > 0.16;
       } else if (e.state === 'windup') {
-        pix = art.front.idle;
+        pix = art.aim;
       } else {
         // pick front/side/back by where the enemy is heading vs where we see it from
         const seen = Math.atan2(this.py - e.y, this.px - e.x);
@@ -510,15 +510,15 @@ export class Game {
         const set = Math.abs(rel) < 0.8 ? art.front
           : Math.abs(rel) > 2.35 ? art.back : art.side;
         if (set === art.side) flip = rel < 0;
-        pix = walk ? set.walk[(e.animT * 3.2 | 0) % 2] : set.idle;
+        pix = walk ? set.walk[(e.animT * 4 | 0) % set.walk.length] : set.idle;
       }
       out.push({ x: e.x, y: e.y, pix, flip, bright, anchor: 'floor' });
     }
     for (const s of this.shots)
-      out.push({ x: s.x, y: s.y, pix: SPRITES.fx.fireball[(s.t * 10 | 0) % 2], anchor: 'mid', bright: true });
+      out.push({ x: s.x, y: s.y, pix: SPRITES.fx.fireball[(s.t * 10 | 0) % 2], anchor: 'mid', bright: true, scale: 1.55 });
     for (const f of this.fx) {
       const frame = Math.min(2, (f.t / 0.45 * 3) | 0);
-      out.push({ x: f.x, y: f.y, pix: SPRITES.fx.boom[frame], anchor: f.anchor, bright: true });
+      out.push({ x: f.x, y: f.y, pix: SPRITES.fx.boom[frame], anchor: f.anchor, bright: true, scale: 1.55 });
     }
     return out;
   }
