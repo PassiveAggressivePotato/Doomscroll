@@ -58,3 +58,9 @@ useful is on the island), and an exit switch behind the last door.
 | `js/px.js` | tiny pixel-buffer toolkit shared by the art generators |
 
 Dev console helpers: `DS.start()`, `DS.warp(x, y, angleDeg)`, `DS.game`.
+
+## Concept art
+
+`concept-art/` has reference sheets for the three enemies (every pose/frame
+the game actually uses), rendered from the live `sprites.js` code — not
+separate artwork the game depends on.
