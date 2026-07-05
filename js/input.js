@@ -4,21 +4,25 @@
 //  • Left thumb, anywhere on the left: a fire button appears where you touch.
 //    Hold and slide it sideways to strafe — it slides with your thumb, and
 //    the further it's pushed the faster you strafe (capped at walk speed).
+//    Push it straight down to safety the gun (stop firing while still able
+//    to strafe); pull it back up to arm it again — there's a bit of
+//    resistance in the middle so it doesn't toggle by accident.
 //  • Status bar: quick-tap the ARMS numbers to switch weapons; quick-tap
-//    anywhere else on it to fire (handy for shooting a door open without
-//    reaching for the fire button). Keyboard (WASD/arrows, space, 1-3)
-//    works on desktop.
+//    anywhere else on it to push open whatever door (or the exit switch)
+//    is directly ahead — it doesn't fire a shot. Keyboard (WASD/arrows,
+//    space, 1-3, F to push) works on desktop.
 import { unlock } from './audio.js';
 
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
-    this.move = 0; this.turn = 0; this.strafe = 0; this.fire = false;
+    this.move = 0; this.turn = 0; this.strafe = 0; this.fire = false; this.use = false;
     this.select = null;
     this.joy = null;      // {id, cx, cy, dx, dy} in CSS px
-    this.btn = null;      // {id, cx, cy, dx} — dx (from the touch-down point) drives strafe
-    this.bar = null;      // {id, x0, y0, t0} — status-bar tap tracking (fire / weapon select)
-    this.barFire = false; // one-shot: a quick tap on the status bar just fired
+    this.btn = null;      // {id, cx, cy, dx, dy, armed} — dx drives strafe, dy toggles `armed`
+    this.bar = null;      // {id, x0, y0, t0} — status-bar tap tracking (push / weapon select)
+    this.barUse = false;  // one-shot: a quick tap on the status bar just pushed something
+    this.keyUse = false;  // one-shot: desktop 'F' key just pushed something
     this.tapped = false;  // any tap this frame (title/restart screens)
     this.lastX = 0; this.lastY = 0; // raw CSS px of the most recent tap
     this.keys = new Set();
@@ -38,6 +42,7 @@ export class Input {
       if (e.code === 'Digit1') this.select = 0;
       if (e.code === 'Digit2') this.select = 1;
       if (e.code === 'Digit3') this.select = 2;
+      if (e.code === 'KeyF') this.keyUse = true;
       unlock();
     });
     window.addEventListener('keyup', e => this.keys.delete(e.code));
@@ -57,7 +62,7 @@ export class Input {
     if (x >= window.innerWidth / 2) {
       if (!this.joy) this.joy = { id: e.pointerId, cx: x, cy: y, dx: 0, dy: 0 };
     } else {
-      if (!this.btn) { this.btn = { id: e.pointerId, cx: x, cy: y, dx: 0 }; }
+      if (!this.btn) { this.btn = { id: e.pointerId, cx: x, cy: y, dx: 0, dy: 0, armed: true }; }
     }
   }
 
@@ -72,6 +77,13 @@ export class Input {
     if (this.btn && e.pointerId === this.btn.id) {
       const R = 46;
       this.btn.dx = Math.max(-R, Math.min(R, e.clientX - this.btn.cx));
+      // pushing the button straight down safeties the gun; pulling it back
+      // up arms it again. Different thresholds (26 down, 10 up) give it a
+      // bit of resistance in the middle instead of a hair-trigger toggle.
+      const DOWN = 26, UP = 10;
+      this.btn.dy = Math.max(0, Math.min(DOWN, e.clientY - this.btn.cy));
+      if (this.btn.armed && this.btn.dy >= DOWN) this.btn.armed = false;
+      else if (!this.btn.armed && this.btn.dy <= UP) this.btn.armed = true;
     }
   }
 
@@ -87,9 +99,9 @@ export class Input {
         // a quick tap on the ARMS grid switches weapon
         this.select = Math.min(2, ((s.x0 - r.x0) / (r.x1 - r.x0) * 3) | 0);
       } else if (quick) {
-        // a quick tap anywhere else on the bar fires — handy for popping a
-        // door open (or an enemy) without reaching for the fire button
-        this.barFire = true;
+        // a quick tap anywhere else on the bar pushes open whatever door
+        // (or the exit switch) is directly ahead — it doesn't fire
+        this.barUse = true;
       }
       this.bar = null;
     }
@@ -111,23 +123,24 @@ export class Input {
       turn += this.joy.dx / 46;
     }
     if (this.btn) {
-      fire = true;
+      if (this.btn.armed) fire = true;
       // direct positional mapping (no smoothing/momentum) — sliding back
       // past centre snaps straight to the opposite strafe direction
       strafe += this.btn.dx / 46;
     }
-    if (this.barFire) fire = true;
+    const use = this.barUse || this.keyUse;
     this.move = Math.max(-1, Math.min(1, move));
     this.turn = Math.max(-1, Math.min(1, turn));
     this.strafe = Math.max(-1, Math.min(1, strafe));
     this.fire = fire;
     const out = {
       move: this.move, turn: this.turn, strafe: this.strafe,
-      fire: this.fire, select: this.select, tapped: this.tapped,
+      fire: this.fire, use, select: this.select, tapped: this.tapped,
     };
     this.select = null;
     this.tapped = false;
-    this.barFire = false;
+    this.barUse = false;
+    this.keyUse = false;
     return out;
   }
 }

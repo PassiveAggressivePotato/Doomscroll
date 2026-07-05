@@ -178,11 +178,13 @@ export function drawTouchUI(rend, input, cssToInt) {
     circle(rend, kx, ky, 10, hex('#e8c53a'), true);
   }
   if (input.btn) {
-    // slides horizontally with the thumb — that's also the strafe control now
-    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy);
-    circle(rend, x, y, 17, hex('#e03a2f'));
-    circle(rend, x, y, 16, hex('#7a1710'));
-    drawText(rend, '!', x - 1, y - 5, 2, hex('#ffd9d0'), false);
+    // slides horizontally with the thumb (strafe) and a little vertically
+    // (push down to safety the gun, grey means it won't fire right now)
+    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy + input.btn.dy);
+    const armed = input.btn.armed;
+    circle(rend, x, y, 17, armed ? hex('#e03a2f') : hex('#6a6d64'));
+    circle(rend, x, y, 16, armed ? hex('#7a1710') : hex('#34362f'));
+    drawText(rend, '!', x - 1, y - 5, 2, armed ? hex('#ffd9d0') : hex('#c9cec2'), false);
   }
 }
 

@@ -266,9 +266,17 @@ export class Game {
       return;
     }
     if (!fromPlayer) return;
-    // wall interactions: doors open, the exit switch ends the level
+    // shooting opens doors; the exit switch doesn't respond to gunfire —
+    // it has to be pushed (see useAction)
     if (wallHit.doorIdx !== undefined && bestD < 20) this.openDoor(wallHit.doorIdx);
-    if (wallHit.switch && bestD < 6 && !this.won) {
+  }
+
+  // The bottom bar's tap-to-push: opens whatever door is directly ahead, or
+  // throws the exit switch — a close-range physical action, not a shot.
+  useAction() {
+    const wallHit = this.castWall(this.px, this.py, this.angle);
+    if (wallHit.doorIdx !== undefined && wallHit.dist < 2.5) { this.openDoor(wallHit.doorIdx); return; }
+    if (wallHit.switch && wallHit.dist < 2.5 && !this.won) {
       this.won = true; this.wonT = 0;
       sfx.play('win');
     }
@@ -479,6 +487,7 @@ export class Game {
       this.weapon = input.select; this.switching = 0.25; sfx.play('click');
     }
     if (input.fire && this.cool <= 0 && this.switching <= 0) this.playerShoot();
+    if (input.use) this.useAction();
 
     // ---- nukage floor burns
     if (this.floor[(this.py | 0) * this.w + (this.px | 0)] === 'nukage') {
@@ -557,6 +566,7 @@ export class Game {
       this.weapon = input.select; this.switching = 0.25; sfx.play('click');
     }
     if (input.fire && this.cool <= 0 && this.switching <= 0) this.playerShoot();
+    if (input.use) this.useAction();
 
     if (this.floor[(this.py | 0) * this.w + (this.px | 0)] === 'nukage') {
       this.nukageT -= dt;
