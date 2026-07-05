@@ -8,9 +8,9 @@ const TAU = Math.PI * 2;
 const wrapA = a => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI;
 
 export const WEAPONS = [
-  { name: 'PISTOL', ammo: 'bullets', rate: 0.42, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.012, kick: 1 },
-  { name: 'SHOTGUN', ammo: 'shells', rate: 1.0, pellets: 7, dmg: () => 4 + rnd() * 6, spread: 0.075, kick: 3 },
-  { name: 'CHAINGUN', ammo: 'bullets', rate: 0.135, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.035, kick: 1 },
+  { name: 'PISTOL', ammo: 'bullets', rate: 0.42, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.012, kick: 10 },
+  { name: 'SHOTGUN', ammo: 'shells', rate: 1.0, pellets: 7, dmg: () => 4 + rnd() * 6, spread: 0.075, kick: 26 },
+  { name: 'CHAINGUN', ammo: 'bullets', rate: 0.135, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.035, kick: 8 },
 ];
 
 const ENEMY_TYPES = {
@@ -79,7 +79,7 @@ export class Game {
     this.bullets = 50; this.shells = 0;
     this.have = [true, false, false];
     this.weapon = 0;
-    this.cool = 0; this.muzzle = 0; this.bob = 0; this.switching = 0;
+    this.cool = 0; this.muzzle = 0; this.bob = 0; this.switching = 0; this.recoil = 0;
     this.faceHit = 0; this.faceFire = 0; this.flashR = 0; this.flashY = 0;
     this.nukageT = 0;
     this.msg = null; this.msgT = 0;
@@ -172,6 +172,7 @@ export class Game {
     this.cool = this.weapon === 0 && !usesAmmo ? 0.8 : W.rate;
     if (usesAmmo) this[W.ammo] -= 1;
     this.muzzle = 0.12 + (this.weapon === 1 ? 0.1 : 0);
+    this.recoil = 1;
     this.faceFire = 0.3;
     sfx.play(['pistol', 'shotgun', 'chaingun'][this.weapon]);
     this.noise(this.px, this.py);
@@ -294,6 +295,7 @@ export class Game {
     this.faceFire = Math.max(0, this.faceFire - dt);
     this.muzzle = Math.max(0, this.muzzle - dt);
     this.cool = Math.max(0, this.cool - dt);
+    this.recoil = Math.max(0, this.recoil - dt * 5.5);
     this.switching = Math.max(0, this.switching - dt);
 
     // doors animate regardless of player state

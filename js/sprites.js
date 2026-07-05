@@ -674,72 +674,11 @@ function boom(step) { // 0..2 expanding blast
 }
 
 // --------------------------------------------------- first-person weapons
-// Drawn 96×72; game scales them to sit at the bottom of the 3-D view.
+// Pistol & shotgun are hand-drawn PNGs (assets/weapons/, loaded in
+// buildSprites below) already sized for the internal 224px-wide canvas.
+// The chaingun has no art yet, so it's still drawn in code on a 96×72 canvas.
 const SKIN = hex('#b98f5e'), SKIN_D = hex('#8f6b42'), GLOVE = hex('#3d3428');
 
-function fpPistol(fire) {
-  const p = new Pix(96, 72);
-  const cx = 48;
-  const rise = fire ? 3 : 0; // recoil hop
-  // slide
-  p.rect(cx - 8, 18 + rise, 16, 26, hex('#464a4f'));
-  p.rect(cx - 8, 18 + rise, 4, 26, hex('#5f636a'));       // left highlight
-  p.rect(cx + 5, 18 + rise, 3, 26, hex('#33363a'));       // right shadow
-  for (let i = 0; i < 4; i++) p.rect(cx - 7, 22 + rise + i * 3, 3, 1, hex('#2c2e31')); // serrations
-  // muzzle end + front sight
-  p.rect(cx - 6, 13 + rise, 12, 6, hex('#33363a'));
-  p.rect(cx - 3, 14 + rise, 6, 4, hex('#1c1e20'));        // bore shadow
-  p.rect(cx - 1, 10 + rise, 2, 4, hex('#5f636a'));        // sight post
-  // frame + trigger guard
-  p.rect(cx - 9, 44 + rise, 18, 6, hex('#2f3236'));
-  p.rect(cx - 9, 44 + rise, 18, 2, hex('#43474c'));
-  // gripping hands (gloved, knuckley)
-  p.ellipse(cx - 18, 48, 18, 18, SKIN);
-  p.ellipse(cx + 1, 48, 17, 18, SKIN_D);
-  p.rect(cx - 16, 54, 32, 18, SKIN);
-  p.rect(cx + 2, 54, 15, 18, SKIN_D);
-  for (let i = 0; i < 4; i++) {
-    p.rect(cx - 14 + i * 6, 51, 5, 4, shade(SKIN, 1.12));            // knuckles
-    p.rect(cx - 14 + i * 6 + 4, 52, 1, 12, shade(SKIN, 0.7));        // finger gaps
-  }
-  // wrist wraps / sleeves
-  p.rect(cx - 20, 66, 18, 6, hex('#5c6136'));
-  p.rect(cx + 6, 66, 18, 6, hex('#4a4f2b'));
-  if (fire) {
-    p.ellipse(cx - 11, 0, 22, 15, hex('#ff9d2e'));
-    p.ellipse(cx - 7, 2, 14, 10, hex('#ffe86b'));
-    p.ellipse(cx - 4, 4, 8, 6, hex('#fffcd6'));
-  }
-  p.outline(OUT);
-  return p;
-}
-function fpShotgun(fire, pump) {
-  const p = new Pix(96, 72);
-  const cx = 48;
-  const rise = pump ? 8 : 0; // pulled back while pumping
-  p.rect(cx - 12, 10 + rise, 24, 36, hex('#4b4d50'));       // fat barrel
-  p.rect(cx - 12, 10 + rise, 6, 36, hex('#63666b'));
-  p.rect(cx + 8, 10 + rise, 4, 36, hex('#37393d'));
-  for (let i = 0; i < 5; i++) p.rect(cx - 10, 14 + rise + i * 6, 20, 1, hex('#3a3c40')); // vent ribs
-  p.ellipse(cx - 12, 5 + rise, 24, 10, hex('#33363a'));      // muzzle ring
-  p.ellipse(cx - 7, 7 + rise, 14, 6, hex('#131415'));        // bore
-  p.rect(cx - 14, 46 + rise, 28, 11, hex('#6b4a2a'));        // pump
-  p.rect(cx - 14, 46 + rise, 28, 3, hex('#7d5a36'));
-  for (let i = 0; i < 6; i++) p.rect(cx - 12 + i * 5, 49 + rise, 1, 6, hex('#553a20'));
-  p.ellipse(cx - 24, 50 + rise, 22, 20, SKIN);               // fore hand
-  p.rect(cx - 22, 56 + rise, 28, 16, SKIN);
-  for (let i = 0; i < 4; i++) p.rect(cx - 20 + i * 6, 53 + rise, 5, 4, shade(SKIN, 1.12));
-  p.rect(cx + 6, 58, 24, 14, SKIN_D);                        // trigger hand
-  p.rect(cx - 26, 68 + rise, 20, 4, hex('#5c6136'));         // sleeve
-  p.rect(cx + 12, 70, 18, 2, hex('#4a4f2b'));
-  if (fire) {
-    p.ellipse(cx - 16, 0, 32, 22, hex('#ff9d2e'));
-    p.ellipse(cx - 10, 2, 20, 14, hex('#ffe86b'));
-    p.ellipse(cx - 5, 4, 10, 8, hex('#fffcd6'));
-  }
-  p.outline(OUT);
-  return p;
-}
 function fpChaingun(fire, spin) {
   const p = new Pix(96, 72);
   const cx = 48;
@@ -895,11 +834,9 @@ export async function buildSprites() {
     fireball: [fireball(0), fireball(1)],
     boom: [boom(0), boom(1), boom(2)],
   };
-  FP.pistol = { idle: fpPistol(false), fire: [fpPistol(true), fpPistol(false)] };
-  FP.shotgun = {
-    idle: fpShotgun(false, false),
-    fire: [fpShotgun(true, false), fpShotgun(false, true), fpShotgun(false, false)],
-  };
+  const w = await loadSet('assets/weapons', ['pistol_idle', 'pistol_fire', 'shotgun_idle', 'shotgun_fire']);
+  FP.pistol = { idle: w.pistol_idle, fire: [w.pistol_fire] };
+  FP.shotgun = { idle: w.shotgun_idle, fire: [w.shotgun_fire] };
   FP.chaingun = { idle: fpChaingun(false, false), fire: [fpChaingun(true, false), fpChaingun(true, true)] };
   FACES.tiers = [];
   for (let t = 0; t < 4; t++)

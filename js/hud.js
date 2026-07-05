@@ -150,18 +150,18 @@ export function drawHud(rend, g) {
 
 // ---- first-person weapon ---------------------------------------------------
 export function drawWeapon(rend, g) {
-  let set = FP.pistol;
-  if (g.weapon === 1) set = FP.shotgun;
-  if (g.weapon === 2) set = FP.chaingun;
+  let set = FP.pistol, s = 1;
+  if (g.weapon === 1) { set = FP.shotgun; }
+  if (g.weapon === 2) { set = FP.chaingun; s = rend.W / 96 * 0.78; } // chaingun is still code-drawn on a 96x72 canvas
   let pix = set.idle;
   if (g.muzzle > 0) pix = set.fire[0];
-  else if (g.weapon === 1 && g.cool > 0.45) pix = set.fire[g.cool > 0.65 ? 1 : 2];
   else if (g.weapon === 2 && g.cool > 0.06) pix = set.fire[1];
-  const s = rend.W / 96 * 0.78;
   const bobX = Math.sin(g.bob) * 5, bobY = Math.abs(Math.cos(g.bob)) * 4;
-  const kick = g.muzzle > 0 ? WEAPONS[g.weapon].kick * 2 : 0;
-  let y = rend.viewH - pix.h * s + 10 + bobY + kick + g.switching * 90;
-  rend.blit(pix, (rend.W - pix.w * s) / 2 + bobX, y, s);
+  // recoil: a sharp kick up on firing, easing back down to rest
+  const recoilY = -g.recoil * WEAPONS[g.weapon].kick;
+  const recoilX = (g.weapon === 1 ? -g.recoil * 4 : 0); // shotgun also snaps slightly aside
+  let y = rend.viewH - pix.h * s + 10 + bobY + recoilY + g.switching * 90;
+  rend.blit(pix, (rend.W - pix.w * s) / 2 + bobX + recoilX, y, s);
 }
 
 // ---- touch overlays ---------------------------------------------------------
