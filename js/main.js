@@ -13,7 +13,7 @@ const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
 buildTextures();
-buildSprites();
+await buildSprites();
 
 let rend = null, back = null, backCtx = null, img = null;
 let game = null;

@@ -4,6 +4,7 @@
 // 48×72 base canvas, aim/fire poses, 3-frame front walk, 2 pain frames,
 // falling death.
 import { Pix, hex, shade, makeRng } from './px.js';
+import { loadSet } from './assets.js';
 
 const OUT = hex('#101010'); // outline colour
 
@@ -856,9 +857,48 @@ function buildActor(t, k) {
   };
 }
 
-export function buildSprites() {
-  SPRITES.grunt = buildActor(THEMES.grunt, 1);
-  SPRITES.serg = buildActor(THEMES.serg, 1);
+// the sergeant is the grunt art with the uniform pushed to navy grey
+function sergify(pix) {
+  const p = pix.clone();
+  for (let i = 0; i < p.data.length; i++) {
+    const c = p.data[i];
+    if (!(c >>> 24)) continue;
+    const r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+    if (g >= r * 0.95 && g > b * 1.15 && g > 35 && g < 170) {
+      const nr = (r * 0.82) | 0, ng = (g * 0.88) | 0;
+      const nb = Math.min(255, (b * 1.55 + 12) | 0);
+      p.data[i] = ((c & 0xff000000) | (nb << 16) | (ng << 8) | nr) >>> 0;
+    }
+  }
+  return p;
+}
+
+function mapActor(a, fn) {
+  return {
+    front: { idle: fn(a.front.idle), walk: a.front.walk.map(fn) },
+    side: { idle: fn(a.side.idle), walk: a.side.walk.map(fn) },
+    back: { idle: fn(a.back.idle), walk: a.back.walk.map(fn) },
+    aim: fn(a.aim), fire: fn(a.fire),
+    pain: a.pain.map(fn), death: a.death.map(fn),
+  };
+}
+
+export async function buildSprites() {
+  const g = await loadSet('assets/grunt', [
+    'idle_front', 'walk_front_1', 'walk_front_2', 'walk_front_3',
+    'aim_front', 'fire_front', 'walk_side_1', 'walk_side_2',
+    'aim_side', 'idle_back', 'pain_1', 'pain_2', 'die_1', 'die_2',
+  ]);
+  SPRITES.grunt = {
+    front: { idle: g.idle_front, walk: [g.walk_front_1, g.walk_front_2, g.walk_front_3] },
+    // side art faces left in-engine; the aim_side sheet faces right, so mirror it
+    side: { idle: g.aim_side.mirrored(), walk: [g.walk_side_1, g.walk_side_2] },
+    back: { idle: g.idle_back, walk: [g.idle_back, g.idle_back] },
+    aim: g.aim_front, fire: g.fire_front,
+    pain: [g.pain_1, g.pain_2],
+    death: [g.die_1, g.die_2],
+  };
+  SPRITES.serg = mapActor(SPRITES.grunt, sergify);
   SPRITES.brute = buildActor(THEMES.brute, 1.3);
   SPRITES.items = {
     shotgun: itemShotgun(), chaingun: itemChaingun(), medkit: itemMedkit(),
