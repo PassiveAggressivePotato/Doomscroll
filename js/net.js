@@ -6,6 +6,12 @@
 // becomes a JOINER who can connect to the host directly. If PeerJS fails
 // to load, or the broker/WebRTC is unreachable, we fall back to 'solo'
 // and the game plays exactly as before.
+//
+// SIDELINED FOR NOW: flip this to true (and restore the PeerJS <script>
+// tag in index.html) to bring co-op back. The rest of this file, plus the
+// host/joiner code in game.js, is untouched and ready to go.
+const ENABLED = false;
+
 const LOBBY_ID = 'doomscroll-hangar13-lobby-v1';
 
 export let role = 'pending'; // 'pending' | 'host' | 'join' | 'solo'
@@ -31,7 +37,7 @@ function wireConnection(c) {
 // `handlers`: { onRole(role), onConnected(), onData(msg), onDisconnected() }
 export function initNet(h) {
   handlers = h;
-  if (typeof Peer === 'undefined') { toSolo(); return; }
+  if (!ENABLED || typeof Peer === 'undefined') { toSolo(); return; }
 
   // safety net: never leave the title screen guessing forever
   const giveUp = setTimeout(toSolo, 6000);
