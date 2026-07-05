@@ -495,7 +495,8 @@ export class Game {
       const art = SPRITES[e.T.art];
       let pix, flip = false, bright = false;
       if (e.state === 'dead') {
-        pix = e.deadT < 0.35 ? art.death[0] : art.death[1];
+        const di = e.deadT < 0.15 ? 0 : e.deadT < 0.35 ? 1 : e.deadT < 0.55 ? 2 : 3;
+        pix = art.death[Math.min(di, art.death.length - 1)];
       } else if (e.state === 'pain') {
         pix = art.pain[e.t > 0.16 ? 0 : 1];
       } else if (e.state === 'shoot') {
