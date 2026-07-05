@@ -55,7 +55,7 @@ export const MAP_STR = [
 // level-load time (see Game#spawnEnemies in game.js).
 export const ENEMY_ROOMS = [
   { name: 'start',     x0: 8,  y0: 25, x1: 18, y1: 33, spawns: [['grunt', 2]] },
-  { name: 'outside',   x0: 17, y0: 2,  x1: 29, y1: 10, spawns: [['grunt', 1]] },
+  { name: 'outside',   x0: 17, y0: 2,  x1: 29, y1: 10, spawns: [['grunt', 3], ['serg', 2]] },
   { name: 'connector', x0: 10, y0: 3,  x1: 14, y1: 8,  spawns: [['serg', 1]] },
   { name: 'nukage',    x0: 3,  y0: 12, x1: 9,  y1: 18, spawns: [['grunt', 1], ['serg', 1]] },
   { name: 'computer',  x0: 15, y0: 13, x1: 26, y1: 21, spawns: [['grunt', 2], ['serg', 1]],

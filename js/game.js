@@ -86,19 +86,20 @@ export class Game {
   }
 
   // Rooms carry a fixed roster; positions are randomised within the room
-  // rect each time the level loads (see ENEMY_ROOMS in level.js).
+  // rect each time the level loads (see ENEMY_ROOMS in level.js). Spacing
+  // is checked against every enemy placed so far, not just this room's.
   spawnEnemies() {
+    const placed = [];
     for (const room of ENEMY_ROOMS) {
-      const taken = [];
       for (const [type, count] of room.spawns) {
         const T = ENEMY_TYPES[type];
         for (let n = 0; n < count; n++) {
-          const spot = this.pickSpawnSpot(room.x0, room.y0, room.x1, room.y1, taken, room.avoid);
+          const spot = this.pickSpawnSpot(room.x0, room.y0, room.x1, room.y1, placed, room.avoid);
           if (!spot) continue;
-          taken.push(spot);
+          placed.push(spot);
           this.enemies.push({
             type, T, x: spot.x, y: spot.y, hp: T.hp, state: 'idle', t: 0,
-            homeX: spot.x, homeY: spot.y, wanderT: rnd() * 1.5, wandering: false,
+            homeX: spot.x, homeY: spot.y, wanderT: rnd() * 1.5, wandering: false, noticeT: 0,
             moveA: rnd() * TAU, cd: 1 + rnd(), animT: rnd() * 10, repath: 0, deadT: 0,
           });
         }
@@ -107,13 +108,14 @@ export class Game {
   }
 
   pickSpawnSpot(x0, y0, x1, y1, taken, avoid) {
+    const MIN_SEP = 1.6; // enemies never spawn closer together than this
     for (let tries = 0; tries < 80; tries++) {
       const x = x0 + 0.6 + rnd() * (x1 - x0 - 1.2);
       const y = y0 + 0.6 + rnd() * (y1 - y0 - 1.2);
       if (this.blockedForMove(x, y, 0.32)) continue;
       if (this.floor[(y | 0) * this.w + (x | 0)] === 'nukage') continue;
       if (Math.hypot(x - this.px, y - this.py) < 2.5) continue;
-      if (taken.some(t => Math.hypot(x - t.x, y - t.y) < 1.0)) continue;
+      if (taken.some(t => Math.hypot(x - t.x, y - t.y) < MIN_SEP)) continue;
       if (avoid && avoid.some(a => x >= a.x0 && x <= a.x1 && y >= a.y0 && y <= a.y1)) continue;
       return { x, y };
     }
@@ -296,11 +298,11 @@ export class Game {
     }
   }
 
-  noise(x, y) { // gunfire & explosions wake nearby enemies
+  noise(x, y) { // gunfire & explosions wake nearby enemies — never through walls/closed doors
     for (const e of this.enemies) {
       if (e.state !== 'idle') continue;
       const d = Math.hypot(e.x - x, e.y - y);
-      if (d < 6 || (d < 12 && this.los(x, y, e.x, e.y))) this.wake(e);
+      if (d < 12 && this.los(x, y, e.x, e.y)) this.wake(e);
     }
   }
   wake(e) {
@@ -446,22 +448,26 @@ export class Game {
             e.moveA = rnd() * TAU;
             e.wandering = rnd() < 0.6;
           }
-          if (e.wandering) {
+          // no walking-away animation exists yet — stand still rather than
+          // slide backwards ("moonwalk") when the current heading would
+          // show the player our back
+          const withinLeash = Math.hypot(e.x - e.homeX, e.y - e.homeY) < 2.2;
+          if (e.wandering && withinLeash && this.enemyFacing(e).cls !== 'back') {
             const sp = e.T.speed * 0.35 * dt;
-            const leash = 2.2;
-            const wx = e.x + Math.cos(e.moveA) * sp;
-            const wy = e.y + Math.sin(e.moveA) * sp;
-            if (Math.hypot(wx - e.homeX, e.y - e.homeY) < leash &&
-                !this.blockedForMove(wx, e.y, e.T.radius) && !this.bumpOthers(e, wx, e.y)) e.x = wx;
-            else e.wanderT = 0;
-            if (Math.hypot(e.x - e.homeX, wy - e.homeY) < leash &&
-                !this.blockedForMove(e.x, wy, e.T.radius) && !this.bumpOthers(e, e.x, wy)) e.y = wy;
-            else e.wanderT = 0;
+            const used = this.tryEnemyMove(e, e.moveA, sp);
+            if (used !== null) e.moveA = used;
           }
-          // only triggered by: facing the player up close, or noise() / a
-          // direct hit (both handled via wake() elsewhere)
-          const facing = Math.abs(wrapA(angTo - e.moveA)) < 0.6;
-          if (dist < 5.5 && facing && this.los(e.x, e.y, this.px, this.py)) this.wake(e);
+          // triggers: facing the player up close, standing near them long
+          // enough to be noticed, or noise()/a direct hit (via wake() elsewhere)
+          const nearLOS = dist < 5.5 && this.los(e.x, e.y, this.px, this.py);
+          const facingPlayer = Math.abs(wrapA(angTo - e.moveA)) < 0.6;
+          if (nearLOS && facingPlayer) { this.wake(e); break; }
+          if (nearLOS) {
+            e.noticeT += dt;
+            if (e.noticeT > 2) this.wake(e);
+          } else {
+            e.noticeT = 0;
+          }
           break;
         }
         case 'pain':
@@ -504,14 +510,13 @@ export class Game {
             e.moveA = angTo + (dist > 2.2 ? (rnd() - 0.5) * 1.1 : (rnd() - 0.5) * 0.35);
           }
           const sp = e.T.speed * dt;
-          let ex = e.x + Math.cos(e.moveA) * sp;
-          let ey = e.y + Math.sin(e.moveA) * sp;
-          let bumped = false;
-          if (!this.blockedForMove(ex, e.y, e.T.radius) && !this.bumpOthers(e, ex, e.y)) e.x = ex;
-          else bumped = true;
-          if (!this.blockedForMove(e.x, ey, e.T.radius) && !this.bumpOthers(e, e.x, ey)) e.y = ey;
-          else bumped = true;
-          if (bumped) e.repath = Math.min(e.repath, 0.08);
+          const before = e.moveA;
+          const used = this.tryEnemyMove(e, e.moveA, sp);
+          if (used === null) e.repath = Math.min(e.repath, 0.08); // fully wedged; repath sooner
+          else {
+            if (used !== before) e.repath = Math.min(e.repath, 0.15); // had to steer around a corner
+            e.moveA = used;
+          }
           // enemies shove doors open as they hunt you
           const fx = e.x + Math.cos(e.moveA) * 0.7, fy = e.y + Math.sin(e.moveA) * 0.7;
           const fi = (fy | 0) * this.w + (fx | 0);
@@ -523,6 +528,37 @@ export class Game {
         }
       }
     }
+  }
+
+  // Which side of `e` the player currently sees, given e's heading (moveA)
+  // vs. the direction from e to the player — used for both sprite choice
+  // and to keep actual movement in sync with what's shown (no moonwalking).
+  enemyFacing(e) {
+    const seen = Math.atan2(this.py - e.y, this.px - e.x);
+    const rel = wrapA(e.moveA - seen);
+    const cls = Math.abs(rel) < 0.8 ? 'front' : Math.abs(rel) > 2.35 ? 'back' : 'side';
+    return { cls, rel };
+  }
+
+  // Move `e` roughly along `angle` for `dist`, sliding along walls; if it's
+  // fully wedged (both axes blocked) fan out to nearby angles to steer
+  // around the corner instead of freezing against it. Returns the angle
+  // actually used (so callers can keep facing == movement), or null if
+  // nothing worked at all.
+  tryEnemyMove(e, angle, dist) {
+    const tryAt = a => {
+      const nx = e.x + Math.cos(a) * dist, ny = e.y + Math.sin(a) * dist;
+      let moved = false;
+      if (!this.blockedForMove(nx, e.y, e.T.radius) && !this.bumpOthers(e, nx, e.y)) { e.x = nx; moved = true; }
+      if (!this.blockedForMove(e.x, ny, e.T.radius) && !this.bumpOthers(e, e.x, ny)) { e.y = ny; moved = true; }
+      return moved;
+    };
+    if (tryAt(angle)) return angle;
+    for (const off of [0.5, -0.5, 0.9, -0.9, 1.3, -1.3]) {
+      const a = angle + off;
+      if (tryAt(a)) return a;
+    }
+    return null;
   }
 
   bumpOthers(self, x, y) {
@@ -557,11 +593,9 @@ export class Game {
         pix = art.aim;
       } else {
         // pick front/side/back by where the enemy is heading vs where we see it from
-        const seen = Math.atan2(this.py - e.y, this.px - e.x);
-        const rel = wrapA(e.moveA - seen);
-        const walk = e.state === 'chase' || (e.state === 'idle' && e.wandering);
-        const set = Math.abs(rel) < 0.8 ? art.front
-          : Math.abs(rel) > 2.35 ? art.back : art.side;
+        const { cls, rel } = this.enemyFacing(e);
+        const walk = e.state === 'chase' || (e.state === 'idle' && e.wandering && cls !== 'back');
+        const set = cls === 'front' ? art.front : cls === 'back' ? art.back : art.side;
         if (set === art.side) flip = rel < 0;
         pix = walk ? set.walk[(e.animT * 4 | 0) % set.walk.length] : set.idle;
       }
