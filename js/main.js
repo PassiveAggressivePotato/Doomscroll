@@ -14,6 +14,7 @@ ctx.imageSmoothingEnabled = false;
 
 buildTextures();
 await buildSprites();
+await hud.loadTitleArt();
 
 let rend = null, back = null, backCtx = null, img = null;
 let game = null;
@@ -59,6 +60,10 @@ function newGame() {
 // dev/test hook: DS.warp(x, y, angleDeg) teleports; DS.game inspects state
 window.DS = {
   get game() { return game; },
+  get state() { return state; },
+  get stateT() { return stateT; },
+  get titleBtn() { return hud.titleBtnRect; },
+  get internalSize() { return rend ? [INTERNAL_W, rend.H] : null; },
   start() { if (state === 'title') { newGame(); state = 'play'; stateT = 0; } },
   warp(x, y, aDeg = -90) {
     if (!game) return;
@@ -77,11 +82,15 @@ function frame(now) {
 
   if (state === 'title') {
     hud.drawTitle(rend, stateT);
-    if (inp.tapped && stateT > 0.4) {
-      unlock();
-      newGame();
-      state = 'play';
-      stateT = 0;
+    if (inp.tapped) {
+      const [tx, ty] = cssToInt(input.lastX, input.lastY);
+      const r = hud.titleBtnRect;
+      if (tx >= r.x0 && tx <= r.x1 && ty >= r.y0 && ty <= r.y1) {
+        unlock();
+        newGame();
+        state = 'play';
+        stateT = 0;
+      }
     }
   } else if (state === 'play') {
     game.update(dt, inp);

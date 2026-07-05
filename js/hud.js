@@ -1,8 +1,10 @@
 // hud.js — status bar (concept-styled: AMMO HEALTH ARMS FACE ARMOR + tallies),
 // the first-person weapon, touch-control overlays, messages and full screens.
 import { Pix, hex, shade, makeRng } from './px.js';
-import { FACES, FP, SPRITES } from './sprites.js';
+import { FACES, FP } from './sprites.js';
 import { WEAPONS } from './game.js';
+import { loadSet } from './assets.js';
+import * as sfx from './audio.js';
 
 export const HUD_H = 52;
 
@@ -203,32 +205,97 @@ export function drawMessages(rend, g) {
   if (g.flashY > 0) rend.tint(0, 0, rend.W, rend.viewH, 220, 190, 60, Math.min(0.3, g.flashY));
 }
 
-// ---- full screens -------------------------------------------------------------
+// ---- title screen (poster art) --------------------------------------------
+// nonglow -> flash -> breathe between glow/glitch, with a screen-glitch FX
+// + sound each time the glitch phase of the breath comes around.
+const TITLE = {};
+export async function loadTitleArt() {
+  const t = await loadSet('assets/ui', ['title_nonglow', 'title_glow', 'title_glitch', 'tap_start']);
+  Object.assign(TITLE, t);
+}
+
+const FLASH_AT = 0.9;    // seconds showing the plain logo before it flashes on
+const FLASH_DUR = 0.16;
+const GLOW_LEN = 2.3;    // breathing cycle: mostly glowing...
+const GLITCH_LEN = 0.5;  // ...with a short glitch pulse
+const CYCLE_LEN = GLOW_LEN + GLITCH_LEN;
+
+// screen-space corruption: torn/shifted scanlines + a chromatic-aberration
+// band + scattered noise pixels. Cheap, so safe to run every glitch frame.
+function applyGlitchFX(rend) {
+  const { W, H, fb } = rend;
+  const bands = 3 + ((Math.random() * 4) | 0);
+  for (let b = 0; b < bands; b++) {
+    const y0 = (Math.random() * H) | 0;
+    const bh = 1 + ((Math.random() * 4) | 0);
+    const shift = ((Math.random() - 0.5) * 40) | 0;
+    for (let y = y0; y < Math.min(H, y0 + bh); y++) {
+      const row = y * W;
+      const src = fb.slice(row, row + W);
+      for (let x = 0; x < W; x++) {
+        const sx = x - shift;
+        fb[row + x] = sx >= 0 && sx < W ? src[sx] : 0;
+      }
+    }
+  }
+  // one chromatic-split strip
+  if (Math.random() < 0.8) {
+    const y0 = (Math.random() * H) | 0, bh = 6 + ((Math.random() * 14) | 0);
+    const off = 2 + ((Math.random() * 4) | 0);
+    for (let y = y0; y < Math.min(H, y0 + bh); y++) {
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        const c = fb[row + x];
+        const rx = Math.min(W - 1, x + off), bx = Math.max(0, x - off);
+        const cr = fb[row + rx], cb = fb[row + bx];
+        fb[row + x] = ((c & 0xff000000) | (cb & 0xff0000) | (c & 0xff00) | (cr & 0xff)) >>> 0;
+      }
+    }
+  }
+  // scattered static noise
+  const noisePx = ((W * H) * 0.01) | 0;
+  for (let i = 0; i < noisePx; i++) {
+    const x = (Math.random() * W) | 0, y = (Math.random() * H) | 0;
+    fb[y * W + x] = Math.random() < 0.5 ? 0xffffffff : (0xff000000 | ((Math.random() * 0xffffff) | 0));
+  }
+}
+
+export const titleBtnRect = { x0: 0, y0: 0, x1: 0, y1: 0 };
+let lastCyclePhase = -1;
+
 export function drawTitle(rend, t) {
   const W = rend.W, H = rend.H;
-  fillRect(rend, 0, 0, W, H, hex('#0d0b0a'));
-  // burnt sky band
-  for (let y = 0; y < H; y++) {
-    const f = Math.max(0, 1 - Math.abs(y - H * 0.32) / (H * 0.32));
-    if (f > 0.05) fillRect(rend, 0, y, W, 1, shade(hex('#7a1f14'), f * 0.9));
+  if (!TITLE.title_nonglow) return; // art still loading
+  const cover = (pix) => {
+    const s = Math.max(W / pix.w, H / pix.h);
+    rend.blit(pix, (W - pix.w * s) / 2, (H - pix.h * s) / 2, s);
+  };
+
+  if (t < FLASH_AT) {
+    cover(TITLE.title_nonglow);
+  } else if (t < FLASH_AT + FLASH_DUR) {
+    cover(TITLE.title_glow);
+    const f = 1 - (t - FLASH_AT) / FLASH_DUR;
+    rend.tint(0, 0, W, H, 255, 255, 240, f * 0.85);
+  } else {
+    const cyclePos = (t - FLASH_AT - FLASH_DUR) % CYCLE_LEN;
+    const glitching = cyclePos >= GLOW_LEN;
+    cover(glitching ? TITLE.title_glitch : TITLE.title_glow);
+    const phase = ((t - FLASH_AT - FLASH_DUR) / CYCLE_LEN) | 0;
+    if (glitching) {
+      if (phase !== lastCyclePhase) { lastCyclePhase = phase; sfx.play('glitch'); }
+      applyGlitchFX(rend);
+    }
   }
-  const title = 'DOOMSCROLL';
-  const s = Math.min(3, ((W - 8) / (title.length * 4)) | 0);
-  const tx = (W - textW(title, s)) / 2 | 0;
-  drawText(rend, title, tx + 1, H * 0.18 | 0, s, hex('#5a0f08'), false);
-  drawText(rend, title, tx, (H * 0.18 | 0) - 2, s, RED);
-  drawText(rend, 'A RETRO NIGHTMARE', (W - textW('A RETRO NIGHTMARE', 1)) / 2 | 0, H * 0.18 + s * 6 + 6 | 0, 1, YEL);
-  drawText(rend, 'FOR YOUR THUMBS', (W - textW('FOR YOUR THUMBS', 1)) / 2 | 0, H * 0.18 + s * 6 + 14 | 0, 1, YEL);
-  // the welcoming committee
-  const g0 = SPRITES.grunt.front.idle, z0 = SPRITES.serg.front.idle, b0 = SPRITES.brute.front.idle;
-  rend.blit(g0, W / 2 - 88, H * 0.40 | 0, 1.4);
-  rend.blit(b0, W / 2 - 38, H * 0.365 | 0, 1.4);
-  rend.blit(z0, W / 2 + 24, H * 0.40 | 0, 1.4);
-  if ((t * 1.6 | 0) % 2 === 0)
-    drawText(rend, 'TAP TO START', (W - textW('TAP TO START', 2)) / 2 | 0, H * 0.72 | 0, 2, GRY);
-  const tips = ['RIGHT THUMB: MOVE + TURN', 'LEFT THUMB: FIRE', 'SWIPE BOTTOM BAR: STRAFE', 'SHOOT DOORS TO OPEN THEM'];
-  tips.forEach((tip, i) =>
-    drawText(rend, tip, (W - textW(tip, 1)) / 2 | 0, (H * 0.80 | 0) + i * 9, 1, DIM));
+
+  // "TAP HERE TO START" button — a gentle pulse, and it's the only tappable spot
+  const btn = TITLE.tap_start;
+  const pulse = 1 + Math.sin(t * 3.2) * 0.04;
+  const bw = btn.w * pulse, bh = btn.h * pulse;
+  const bx = (W - bw) / 2, by = H * 0.76 - bh / 2;
+  rend.blit(btn, bx, by, pulse);
+  titleBtnRect.x0 = bx; titleBtnRect.y0 = by;
+  titleBtnRect.x1 = bx + bw; titleBtnRect.y1 = by + bh;
 }
 
 export function drawDead(rend, g) {

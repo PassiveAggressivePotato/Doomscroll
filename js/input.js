@@ -15,6 +15,7 @@ export class Input {
     this.btn = null;      // {id, x, y}
     this.swipe = null;    // {id, x0, t0, dx}
     this.tapped = false;  // any tap this frame (title/restart screens)
+    this.lastX = 0; this.lastY = 0; // raw CSS px of the most recent tap
     this.keys = new Set();
     this.hudTop = 9999;   // CSS px; set by layout()
     this.armsRect = null; // {x0,y0,x1,y1} CSS px
@@ -43,6 +44,7 @@ export class Input {
     this.canvas.setPointerCapture?.(e.pointerId);
     this.tapped = true;
     const x = e.clientX, y = e.clientY;
+    this.lastX = x; this.lastY = y; // raw tap position, for hit-testing UI buttons (e.g. the title screen)
     if (y >= this.hudTop) {
       if (!this.swipe) this.swipe = { id: e.pointerId, x0: x, y0: y, t0: performance.now(), dx: 0 };
       return;

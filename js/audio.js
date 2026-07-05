@@ -64,6 +64,12 @@ const RECIPES = {
   wpick: () => { tone(440, 660, 0.1, { g: 0.2 }); tone(660, 990, 0.12, { g: 0.2, delay: 0.09 }); },
   click: () => { tone(800, 500, 0.04, { g: 0.12 }); },
   win: () => { tone(392, 392, 0.14, { g: 0.25 }); tone(523, 523, 0.14, { g: 0.25, delay: 0.14 }); tone(659, 659, 0.3, { g: 0.3, delay: 0.28 }); },
+  glitch: () => {
+    noise(0.22, { f0: 3200, f1: 800, type: 'bandpass', g: 0.35 });
+    tone(900, 90, 0.09, { type: 'square', g: 0.18 });
+    tone(220, 1400, 0.05, { type: 'sawtooth', g: 0.14, delay: 0.06 });
+    tone(1600, 60, 0.07, { type: 'square', g: 0.15, delay: 0.12 });
+  },
 };
 
 // tiny rate-limit so 7 shotgun pellets don't stack 7 sounds
