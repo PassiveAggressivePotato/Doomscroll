@@ -520,8 +520,13 @@ export class Game {
     for (const s of this.shots)
       out.push({ x: s.x, y: s.y, pix: SPRITES.fx.fireball[(s.t * 10 | 0) % 2], anchor: 'mid', bright: true, scale: 1.55 });
     for (const f of this.fx) {
-      const frame = Math.min(2, (f.t / 0.45 * 3) | 0);
-      out.push({ x: f.x, y: f.y, pix: SPRITES.fx.boom[frame], anchor: f.anchor, bright: true, scale: 1.55 });
+      if (f.kind === 'boomS') {
+        const pix = SPRITES.fx.impact[f.t < 0.22 ? 0 : 1];
+        out.push({ x: f.x, y: f.y, pix, anchor: f.anchor, bright: true, scale: 1.55 });
+      } else {
+        const frame = Math.min(2, (f.t / 0.45 * 3) | 0);
+        out.push({ x: f.x, y: f.y, pix: SPRITES.fx.boom[frame], anchor: f.anchor, bright: true, scale: 1.55 });
+      }
     }
     return out;
   }
