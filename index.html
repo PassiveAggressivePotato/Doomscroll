@@ -9,6 +9,9 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
+<!-- co-op matchmaking transport; net.js checks `window.Peer` and falls back
+     to solo play if this fails to load (offline, blocked, CDN down, etc.) -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

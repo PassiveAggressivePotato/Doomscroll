@@ -213,6 +213,26 @@ export async function loadTitleArt() {
   const t = await loadSet('assets/ui', ['title_nonglow', 'title_glow', 'title_glitch', 'tap_start']);
   Object.assign(TITLE, t);
   TITLE.tap_start_glow = makeGlowSprite(TITLE.tap_start, 6, hex('#5cff8c'));
+  // red variant: someone's already hosting a game — tap to join them instead
+  TITLE.tap_start_red = recolorByLuma(TITLE.tap_start, 1.3, 0.18, 0.16);
+  TITLE.tap_start_glow_red = makeGlowSprite(TITLE.tap_start, 6, hex('#ff4433'));
+}
+
+// Recolour every opaque pixel by its luminance (keeps the art's shading/
+// legibility, just changes the hue) — used to turn the green start button
+// red without needing a second hand-drawn asset.
+function recolorByLuma(pix, rMul, gMul, bMul) {
+  const p = pix.clone();
+  for (let i = 0; i < p.data.length; i++) {
+    const c = p.data[i];
+    const a = c >>> 24;
+    if (!a) continue;
+    const r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+    const nr = Math.min(255, luma * rMul) | 0, ng = Math.min(255, luma * gMul) | 0, nb = Math.min(255, luma * bMul) | 0;
+    p.data[i] = ((a << 24) | (nb << 16) | (ng << 8) | nr) >>> 0;
+  }
+  return p;
 }
 
 // Chunky low-res silhouette of `pix` (any opaque pixel in a block lights the
@@ -285,7 +305,7 @@ function applyGlitchFX(rend) {
 export const titleBtnRect = { x0: 0, y0: 0, x1: 0, y1: 0 };
 let lastCyclePhase = -1;
 
-export function drawTitle(rend, t) {
+export function drawTitle(rend, t, joinable) {
   const W = rend.W, H = rend.H;
   if (!TITLE.title_nonglow) return; // art still loading
   const cover = (pix) => {
@@ -310,15 +330,17 @@ export function drawTitle(rend, t) {
     }
   }
 
-  // "TAP HERE TO START" button — a subtle pulse, and it's the only tappable spot
-  const btn = TITLE.tap_start;
+  // "TAP HERE TO START" button — a subtle pulse, and it's the only tappable
+  // spot. Red instead of green means someone else is already playing —
+  // tapping it joins their game instead of starting a new one.
+  const btn = joinable ? TITLE.tap_start_red : TITLE.tap_start;
   const pulse = 1 + Math.sin(t * 3.2) * 0.015;
   const scale = 0.75 * pulse;
   const bw = btn.w * scale, bh = btn.h * scale;
   const bx = (W - bw) / 2, by = H * 0.76 - bh / 2;
 
-  // pixelated green glow behind it, breathing in time with the same motion
-  const glow = TITLE.tap_start_glow;
+  // pixelated glow behind it, breathing in time with the same motion
+  const glow = joinable ? TITLE.tap_start_glow_red : TITLE.tap_start_glow;
   const glowScale = scale * 1.4 * (1 + Math.sin(t * 3.2) * 0.1);
   const gw = glow.w * glowScale, gh = glow.h * glowScale;
   const gx = (W - gw) / 2, gy = by + bh / 2 - gh / 2;
@@ -328,6 +350,12 @@ export function drawTitle(rend, t) {
   rend.blit(btn, bx, by, scale);
   titleBtnRect.x0 = bx; titleBtnRect.y0 = by;
   titleBtnRect.x1 = bx + bw; titleBtnRect.y1 = by + bh;
+}
+
+// Small status line under the button while a join attempt is in flight.
+export function drawNetStatus(rend, text) {
+  const w = textW(text, 1);
+  drawText(rend, text, (rend.W - w) / 2 | 0, Math.round(rend.H * 0.76 + 26), 1, hex('#ffb199'));
 }
 
 export function drawDead(rend, g) {

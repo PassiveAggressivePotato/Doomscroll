@@ -6,6 +6,7 @@ import { Game } from './game.js';
 import { Input } from './input.js';
 import * as hud from './hud.js';
 import { unlock } from './audio.js';
+import * as net from './net.js';
 
 const INTERNAL_W = 224;
 const canvas = document.getElementById('screen');
@@ -53,9 +54,49 @@ const cssToInt = (x, y) => [
   y / window.innerHeight * rend.H | 0,
 ];
 
-function newGame() {
-  game = new Game();
+function newGame(opts) {
+  game = new Game(opts);
 }
+
+// ---- co-op matchmaking -----------------------------------------------------
+// First player to load the page claims a fixed lobby id and becomes the
+// HOST (green button); anyone after that finds it taken and becomes a
+// JOINER (red button — tap to connect instead of starting a new game).
+// See net.js for the whole story, including the solo fallback.
+let joinRequested = false;
+let awaitingSnapshot = false;
+
+net.initNet({
+  onRole() {},
+  onConnected() {
+    if (net.role === 'host' && game) {
+      game.remote = { x: 0, y: 0, angle: 0, moving: false, dead: false, animT: 0 };
+    } else if (net.role === 'join') {
+      awaitingSnapshot = true;
+    }
+  },
+  onData(msg) {
+    if (net.role === 'host') {
+      if (!game) return;
+      if (msg.t === 'p') Object.assign(game.remote || (game.remote = { animT: 0 }), msg);
+      else if (msg.t === 'fire') game.remoteFire(msg);
+      else if (msg.t === 'pickup') { const it = game.items[msg.i]; if (it) it.taken = true; }
+    } else if (net.role === 'join' && msg.t === 'snap') {
+      if (awaitingSnapshot) {
+        awaitingSnapshot = false;
+        newGame({ isJoiner: true, netSend: net.send });
+        game.applySnapshot(msg);
+        state = 'play';
+        stateT = 0;
+      } else if (game) {
+        game.applySnapshot(msg);
+      }
+    }
+  },
+  onDisconnected() {
+    if (game) game.remote = null;
+  },
+});
 
 // dev/test hook: DS.warp(x, y, angleDeg) teleports; DS.game inspects state
 window.DS = {
@@ -64,6 +105,7 @@ window.DS = {
   get stateT() { return stateT; },
   get titleBtn() { return hud.titleBtnRect; },
   get internalSize() { return rend ? [INTERNAL_W, rend.H] : null; },
+  get netRole() { return net.role; },
   start() { if (state === 'title') { newGame(); state = 'play'; stateT = 0; } },
   warp(x, y, aDeg = -90) {
     if (!game) return;
@@ -81,15 +123,21 @@ function frame(now) {
   const inp = input.poll();
 
   if (state === 'title') {
-    hud.drawTitle(rend, stateT);
+    const joinable = net.role === 'join';
+    hud.drawTitle(rend, stateT, joinable);
+    if (joinable && joinRequested && !net.isPaired()) hud.drawNetStatus(rend, 'CONNECTING...');
     if (inp.tapped) {
       const [tx, ty] = cssToInt(input.lastX, input.lastY);
       const r = hud.titleBtnRect;
       if (tx >= r.x0 && tx <= r.x1 && ty >= r.y0 && ty <= r.y1) {
         unlock();
-        newGame();
-        state = 'play';
-        stateT = 0;
+        if (joinable) {
+          if (!joinRequested) { joinRequested = true; net.joinGame(); }
+        } else {
+          newGame();
+          state = 'play';
+          stateT = 0;
+        }
       }
     }
   } else if (state === 'play') {

@@ -32,7 +32,15 @@ const ITEM_DEFS = {
 };
 
 export class Game {
-  constructor() {
+  // opts: { isJoiner, netSend } — netSend(msg) ships a message to the other
+  // player over the data channel; isJoiner means this Game is the thin
+  // client half of a co-op session (host stays authoritative — see
+  // snapshot()/applySnapshot()/remoteFire() below).
+  constructor(opts = {}) {
+    this.isJoiner = !!opts.isJoiner;
+    this.netSend = opts.netSend || null;
+    this.netT = 0;
+    this.remote = null; // the other player, once paired — {x,y,angle,moving,dead,animT}
     this.levelName = LEVEL_NAME;
     const rows = MAP_STR;
     this.h = rows.length; this.w = MAP_W;
@@ -66,7 +74,9 @@ export class Game {
       for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++)
         this.sky[y * this.w + x] = 1;
 
-    this.spawnEnemies();
+    // the host's enemy roster is authoritative; a joiner gets theirs from
+    // the host's first snapshot instead (see applySnapshot)
+    if (!this.isJoiner) this.spawnEnemies();
 
     // player
     this.hp = 100; this.armor = 0;
@@ -206,10 +216,25 @@ export class Game {
     this.recoil = 1;
     this.faceFire = 0.3;
     sfx.play(['pistol', 'shotgun', 'chaingun'][this.weapon]);
+    if (this.isJoiner) {
+      // the host owns enemy/barrel hp — hand them the shot to resolve
+      if (this.netSend) this.netSend({ t: 'fire', x: this.px, y: this.py, angle: this.angle, weapon: this.weapon });
+      return;
+    }
     this.noise(this.px, this.py);
     for (let p = 0; p < W.pellets; p++) {
       const a = this.angle + (rnd() * 2 - 1) * W.spread;
       this.hitscan(this.px, this.py, a, W.dmg(), true);
+    }
+  }
+
+  // Host-side: resolve a shot fired by the joiner (see playerShoot above).
+  remoteFire({ x, y, angle, weapon }) {
+    const W = WEAPONS[weapon];
+    this.noise(x, y);
+    for (let p = 0; p < W.pellets; p++) {
+      const a = angle + (rnd() * 2 - 1) * W.spread;
+      this.hitscan(x, y, a, W.dmg(), true);
     }
   }
 
@@ -298,6 +323,93 @@ export class Game {
     }
   }
 
+  tryPickups() {
+    for (const it of this.items) {
+      if (it.taken) continue;
+      if (Math.hypot(it.x - this.px, it.y - this.py) > 0.55) continue;
+      if (it.kind === 'medkit' && this.hp >= 100) continue;
+      if (it.kind === 'clip' && this.bullets >= 200) continue;
+      if (it.kind === 'shells' && this.shells >= 50) continue;
+      it.taken = true;
+      if (!it.small) this.got++;
+      switch (it.kind) {
+        case 'medkit': this.hp = Math.min(100, this.hp + 25); break;
+        case 'clip': this.bullets = Math.min(200, this.bullets + (it.small ? 5 : 10)); break;
+        case 'shells': this.shells = Math.min(50, this.shells + 4); break;
+        case 'armor': this.armor = 100; break;
+        case 'shotgun':
+          this.have[1] = true; this.shells = Math.min(50, this.shells + 8);
+          this.weapon = 1; this.switching = 0.35; break;
+        case 'chaingun':
+          this.have[2] = true; this.bullets = Math.min(200, this.bullets + 40);
+          this.weapon = 2; this.switching = 0.35; break;
+      }
+      const def = ITEM_DEFS[it.kind];
+      this.msg = def.msg; this.msgT = 2.2;
+      this.flashY = def.big ? 0.4 : 0.22;
+      sfx.play(def.big ? 'wpick' : 'pick');
+      // the joiner's inventory is local/independent — just tell the host so
+      // it marks the item gone too, instead of handing it out twice
+      if (this.isJoiner && this.netSend) this.netSend({ t: 'pickup', i: this.items.indexOf(it) });
+    }
+  }
+
+  // ------------------------------------------------ co-op networking
+  // Host: broadcasts the world; Joiner: broadcasts its own pose. Both are
+  // throttled to keep the data channel light — smoothed locally in between.
+  netTick(dt) {
+    if (!this.netSend) return;
+    this.netT -= dt;
+    if (this.netT > 0) return;
+    this.netT = 0.05;
+    if (this.isJoiner) {
+      this.netSend({ t: 'p', x: this.px, y: this.py, angle: this.angle, moving: this._moving, dead: this.dead });
+    } else if (this.remote) {
+      this.netSend(this.snapshot());
+    }
+  }
+
+  // Host-side: the full world state the joiner needs to render (enemies,
+  // item/door/barrel state) plus the host's own pose (so the joiner can
+  // draw us as their "other player"). FX/fireballs aren't synced in v1.
+  snapshot() {
+    return {
+      t: 'snap',
+      remote: { x: this.px, y: this.py, angle: this.angle, moving: this._moving, dead: this.dead },
+      enemies: this.enemies.map(e => ({
+        type: e.type, x: e.x, y: e.y, state: e.state, t: e.t,
+        moveA: e.moveA, wandering: e.wandering, animT: e.animT, deadT: e.deadT,
+      })),
+      // full data, not just taken-flags: dead enemies drop clips at runtime,
+      // which grows this array beyond the level's fixed starting items
+      items: this.items.map(it => ({ kind: it.kind, x: it.x, y: it.y, small: !!it.small, taken: !!it.taken })),
+      doors: [...this.doors.values()].map(d => d.open),
+      barrels: this.barrels.map(b => ({ hp: b.hp, dead: !!b.dead })),
+      won: this.won,
+    };
+  }
+
+  // Joiner-side: adopt the host's world state wholesale. Items only ever
+  // ratchet taken=false -> true here, so a snapshot can never "un-collect"
+  // something this client already picked up locally itself.
+  applySnapshot(s) {
+    if (!this.remote) this.remote = { animT: 0 };
+    Object.assign(this.remote, s.remote);
+    this.enemies = s.enemies.map(e => ({ ...e, T: ENEMY_TYPES[e.type] }));
+    this.totalKills = this.enemies.length;
+    // append-only + ratchet: never un-collect something taken locally, and
+    // adopt any items the host has added since (e.g. a clip a kill dropped)
+    s.items.forEach((it, i) => {
+      if (this.items[i]) { if (it.taken) this.items[i].taken = true; }
+      else this.items.push({ ...it });
+    });
+    this.totalItems = s.items.filter(it => !it.small).length;
+    const doorList = [...this.doors.values()];
+    s.doors.forEach((open, i) => { if (doorList[i]) doorList[i].open = open; });
+    s.barrels.forEach((b, i) => { if (this.barrels[i]) Object.assign(this.barrels[i], b); });
+    if (s.won && !this.won) { this.won = true; this.wonT = 0; }
+  }
+
   noise(x, y) { // gunfire & explosions wake nearby enemies — never through walls/closed doors
     for (const e of this.enemies) {
       if (e.state !== 'idle') continue;
@@ -316,6 +428,8 @@ export class Game {
 
   // ------------------------------------------------ per-frame update
   update(dt, input) {
+    if (this.isJoiner) return this.updateAsJoiner(dt, input);
+    if (this.remote) this.remote.animT += dt;
     this.time += dt;
     if (this.msgT > 0) this.msgT -= dt;
     this.flashR = Math.max(0, this.flashR - dt * 1.4);
@@ -343,8 +457,8 @@ export class Game {
       }
     }
 
-    if (this.won) { this.wonT += dt; return; }
-    if (this.dead) { this.deadT += dt; this.updateEnemies(dt, false); return; }
+    if (this.won) { this.wonT += dt; this.netTick(dt); return; }
+    if (this.dead) { this.deadT += dt; this.updateEnemies(dt, false); this.netTick(dt); return; }
 
     // ---- movement
     const speed = 3.3, strafeSp = 3.0;
@@ -357,8 +471,8 @@ export class Game {
     const r = 0.28;
     if (!this.blockedForMove(nx, this.py, r)) this.px = nx;
     if (!this.blockedForMove(this.px, ny, r)) this.py = ny;
-    const moving = Math.abs(input.move) + Math.abs(input.strafe) > 0.12;
-    if (moving) this.bob += dt * (5 + 3 * Math.abs(input.move));
+    this._moving = Math.abs(input.move) + Math.abs(input.strafe) > 0.12;
+    if (this._moving) this.bob += dt * (5 + 3 * Math.abs(input.move));
 
     // ---- weapons
     if (input.select !== null && this.have[input.select] && input.select !== this.weapon) {
@@ -372,32 +486,7 @@ export class Game {
       if (this.nukageT <= 0) { this.nukageT = 0.8; this.hurtPlayer(5); }
     } else this.nukageT = 0;
 
-    // ---- pickups
-    for (const it of this.items) {
-      if (it.taken) continue;
-      if (Math.hypot(it.x - this.px, it.y - this.py) > 0.55) continue;
-      if (it.kind === 'medkit' && this.hp >= 100) continue;
-      if (it.kind === 'clip' && this.bullets >= 200) continue;
-      if (it.kind === 'shells' && this.shells >= 50) continue;
-      it.taken = true;
-      if (!it.small) this.got++;
-      switch (it.kind) {
-        case 'medkit': this.hp = Math.min(100, this.hp + 25); break;
-        case 'clip': this.bullets = Math.min(200, this.bullets + (it.small ? 5 : 10)); break;
-        case 'shells': this.shells = Math.min(50, this.shells + 4); break;
-        case 'armor': this.armor = 100; break;
-        case 'shotgun':
-          this.have[1] = true; this.shells = Math.min(50, this.shells + 8);
-          this.weapon = 1; this.switching = 0.35; break;
-        case 'chaingun':
-          this.have[2] = true; this.bullets = Math.min(200, this.bullets + 40);
-          this.weapon = 2; this.switching = 0.35; break;
-      }
-      const def = ITEM_DEFS[it.kind];
-      this.msg = def.msg; this.msgT = 2.2;
-      this.flashY = def.big ? 0.4 : 0.22;
-      sfx.play(def.big ? 'wpick' : 'pick');
-    }
+    this.tryPickups();
 
     // ---- barrels with lit fuses
     for (const b of this.barrels) {
@@ -428,6 +517,54 @@ export class Game {
     this.fx = this.fx.filter(f => f.t < 0.45);
 
     this.updateEnemies(dt, true);
+    this.netTick(dt);
+  }
+
+  // Joiner-side per-frame update: local movement/shooting/pickups for
+  // responsiveness, but no local enemy AI, doors, or barrel simulation —
+  // that world state comes from the host's snapshots (applySnapshot).
+  updateAsJoiner(dt, input) {
+    if (this.remote) this.remote.animT += dt;
+    for (const e of this.enemies) e.animT += dt; // smooth walk-cycles between snapshots
+    this.time += dt;
+    if (this.msgT > 0) this.msgT -= dt;
+    this.flashR = Math.max(0, this.flashR - dt * 1.4);
+    this.flashY = Math.max(0, this.flashY - dt * 2.2);
+    this.faceHit = Math.max(0, this.faceHit - dt);
+    this.faceFire = Math.max(0, this.faceFire - dt);
+    this.muzzle = Math.max(0, this.muzzle - dt);
+    this.cool = Math.max(0, this.cool - dt);
+    this.recoil = Math.max(0, this.recoil - dt * 5.5);
+    this.switching = Math.max(0, this.switching - dt);
+
+    if (this.won) { this.wonT += dt; this.netTick(dt); return; }
+    if (this.dead) { this.deadT += dt; this.netTick(dt); return; }
+
+    const speed = 3.3, strafeSp = 3.0;
+    const mv = input.move * speed * dt;
+    const st = input.strafe * strafeSp * dt;
+    this.angle += input.turn * 2.9 * dt;
+    const ca = Math.cos(this.angle), sa = Math.sin(this.angle);
+    let nx = this.px + ca * mv - sa * st;
+    let ny = this.py + sa * mv + ca * st;
+    const r = 0.28;
+    if (!this.blockedForMove(nx, this.py, r)) this.px = nx;
+    if (!this.blockedForMove(this.px, ny, r)) this.py = ny;
+    this._moving = Math.abs(input.move) + Math.abs(input.strafe) > 0.12;
+    if (this._moving) this.bob += dt * (5 + 3 * Math.abs(input.move));
+
+    if (input.select !== null && this.have[input.select] && input.select !== this.weapon) {
+      this.weapon = input.select; this.switching = 0.25; sfx.play('click');
+    }
+    if (input.fire && this.cool <= 0 && this.switching <= 0) this.playerShoot();
+
+    if (this.floor[(this.py | 0) * this.w + (this.px | 0)] === 'nukage') {
+      this.nukageT -= dt;
+      if (this.nukageT <= 0) { this.nukageT = 0.8; this.hurtPlayer(5); }
+    } else this.nukageT = 0;
+
+    this.tryPickups();
+    this.netTick(dt);
   }
 
   updateEnemies(dt, active) {
@@ -600,6 +737,20 @@ export class Game {
         pix = walk ? set.walk[(e.animT * 4 | 0) % set.walk.length] : set.idle;
       }
       out.push({ x: e.x, y: e.y, pix, flip, bright, anchor: 'floor' });
+    }
+    if (this.remote && !this.remote.dead) {
+      // the other player, rendered with placeholder enemy art for now,
+      // oriented by their actual aim angle (not a movement heading, since
+      // a real player always faces where they're looking)
+      const art = SPRITES.grunt;
+      const seen = Math.atan2(this.py - this.remote.y, this.px - this.remote.x);
+      const rel = wrapA(this.remote.angle - seen);
+      const cls = Math.abs(rel) < 0.8 ? 'front' : Math.abs(rel) > 2.35 ? 'back' : 'side';
+      const set = cls === 'front' ? art.front : cls === 'back' ? art.back : art.side;
+      const flip = set === art.side && rel < 0;
+      const animT = this.remote.animT || 0;
+      const pix = this.remote.moving ? set.walk[(animT * 4 | 0) % set.walk.length] : set.idle;
+      out.push({ x: this.remote.x, y: this.remote.y, pix, flip, anchor: 'floor' });
     }
     for (const s of this.shots)
       out.push({ x: s.x, y: s.y, pix: SPRITES.fx.fireball[(s.t * 10 | 0) % 2], anchor: 'mid', bright: true, scale: 1.55 });
