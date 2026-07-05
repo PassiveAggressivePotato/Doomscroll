@@ -212,6 +212,28 @@ const TITLE = {};
 export async function loadTitleArt() {
   const t = await loadSet('assets/ui', ['title_nonglow', 'title_glow', 'title_glitch', 'tap_start']);
   Object.assign(TITLE, t);
+  TITLE.tap_start_glow = makeGlowSprite(TITLE.tap_start, 6, hex('#5cff8c'));
+}
+
+// Chunky low-res silhouette of `pix` (any opaque pixel in a block lights the
+// whole block) recoloured flat green — blitting it upscaled gives a cheap
+// pixelated glow without touching the source art.
+function makeGlowSprite(pix, factor, color) {
+  const gw = Math.max(1, Math.round(pix.w / factor));
+  const gh = Math.max(1, Math.round(pix.h / factor));
+  const g = new Pix(gw, gh);
+  for (let gy = 0; gy < gh; gy++) {
+    const y0 = Math.floor(gy * pix.h / gh), y1 = Math.max(y0 + 1, Math.floor((gy + 1) * pix.h / gh));
+    for (let gx = 0; gx < gw; gx++) {
+      const x0 = Math.floor(gx * pix.w / gw), x1 = Math.max(x0 + 1, Math.floor((gx + 1) * pix.w / gw));
+      let hit = false;
+      for (let y = y0; y < y1 && !hit; y++)
+        for (let x = x0; x < x1; x++)
+          if (pix.data[y * pix.w + x] >>> 24) { hit = true; break; }
+      if (hit) g.data[gy * gw + gx] = color;
+    }
+  }
+  return g;
 }
 
 const FLASH_AT = 0.9;    // seconds showing the plain logo before it flashes on
@@ -288,12 +310,22 @@ export function drawTitle(rend, t) {
     }
   }
 
-  // "TAP HERE TO START" button — a gentle pulse, and it's the only tappable spot
+  // "TAP HERE TO START" button — a subtle pulse, and it's the only tappable spot
   const btn = TITLE.tap_start;
-  const pulse = 1 + Math.sin(t * 3.2) * 0.04;
-  const bw = btn.w * pulse, bh = btn.h * pulse;
+  const pulse = 1 + Math.sin(t * 3.2) * 0.015;
+  const scale = 0.75 * pulse;
+  const bw = btn.w * scale, bh = btn.h * scale;
   const bx = (W - bw) / 2, by = H * 0.76 - bh / 2;
-  rend.blit(btn, bx, by, pulse);
+
+  // pixelated green glow behind it, breathing in time with the same motion
+  const glow = TITLE.tap_start_glow;
+  const glowScale = scale * 1.4 * (1 + Math.sin(t * 3.2) * 0.1);
+  const gw = glow.w * glowScale, gh = glow.h * glowScale;
+  const gx = (W - gw) / 2, gy = by + bh / 2 - gh / 2;
+  const glowAlpha = 0.32 + Math.sin(t * 3.2) * 0.14;
+  rend.blit(glow, gx, gy, glowScale, Math.max(0.05, glowAlpha));
+
+  rend.blit(btn, bx, by, scale);
   titleBtnRect.x0 = bx; titleBtnRect.y0 = by;
   titleBtnRect.x1 = bx + bw; titleBtnRect.y1 = by + bh;
 }

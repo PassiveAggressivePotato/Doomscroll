@@ -1,5 +1,5 @@
 // game.js — simulation: player, enemies, weapons, doors, pickups, barrels.
-import { MAP_STR, MAP_W, SKY_RECTS, LEVEL_NAME } from './level.js';
+import { MAP_STR, MAP_W, SKY_RECTS, LEVEL_NAME, ENEMY_ROOMS } from './level.js';
 import { SPRITES } from './sprites.js';
 import * as sfx from './audio.js';
 
@@ -57,14 +57,6 @@ export class Game {
       }
       this.floor[i] = c === 'N' ? 'nukage' : 'concrete';
       if (c === 'P') { this.px = x + 0.5; this.py = y + 0.5; this.angle = -Math.PI / 2; }
-      if (c === 'g' || c === 'z' || c === 'b') {
-        const type = c === 'g' ? 'grunt' : c === 'z' ? 'serg' : 'brute';
-        const T = ENEMY_TYPES[type];
-        this.enemies.push({
-          type, T, x: x + 0.5, y: y + 0.5, hp: T.hp, state: 'idle', t: 0,
-          moveA: rnd() * TAU, cd: 1 + rnd(), animT: rnd() * 10, repath: 0, deadT: 0,
-        });
-      }
       const it = { '1': 'shotgun', '2': 'chaingun', '+': 'medkit', 'a': 'clip', 'e': 'shells', 'v': 'armor' }[c];
       if (it) this.items.push({ kind: it, x: x + 0.5, y: y + 0.5 });
       if (c === 'o') this.barrels.push({ x: x + 0.5, y: y + 0.5, hp: 12, boomT: -1 });
@@ -73,6 +65,8 @@ export class Game {
     for (const r of SKY_RECTS)
       for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++)
         this.sky[y * this.w + x] = 1;
+
+    this.spawnEnemies();
 
     // player
     this.hp = 100; this.armor = 0;
@@ -89,6 +83,41 @@ export class Game {
     this.kills = 0; this.totalKills = this.enemies.length;
     this.got = 0; this.totalItems = this.items.length;
     this.shotgunFrame = 0;
+  }
+
+  // Rooms carry a fixed roster; positions are randomised within the room
+  // rect each time the level loads (see ENEMY_ROOMS in level.js).
+  spawnEnemies() {
+    for (const room of ENEMY_ROOMS) {
+      const taken = [];
+      for (const [type, count] of room.spawns) {
+        const T = ENEMY_TYPES[type];
+        for (let n = 0; n < count; n++) {
+          const spot = this.pickSpawnSpot(room.x0, room.y0, room.x1, room.y1, taken, room.avoid);
+          if (!spot) continue;
+          taken.push(spot);
+          this.enemies.push({
+            type, T, x: spot.x, y: spot.y, hp: T.hp, state: 'idle', t: 0,
+            homeX: spot.x, homeY: spot.y, wanderT: rnd() * 1.5, wandering: false,
+            moveA: rnd() * TAU, cd: 1 + rnd(), animT: rnd() * 10, repath: 0, deadT: 0,
+          });
+        }
+      }
+    }
+  }
+
+  pickSpawnSpot(x0, y0, x1, y1, taken, avoid) {
+    for (let tries = 0; tries < 80; tries++) {
+      const x = x0 + 0.6 + rnd() * (x1 - x0 - 1.2);
+      const y = y0 + 0.6 + rnd() * (y1 - y0 - 1.2);
+      if (this.blockedForMove(x, y, 0.32)) continue;
+      if (this.floor[(y | 0) * this.w + (x | 0)] === 'nukage') continue;
+      if (Math.hypot(x - this.px, y - this.py) < 2.5) continue;
+      if (taken.some(t => Math.hypot(x - t.x, y - t.y) < 1.0)) continue;
+      if (avoid && avoid.some(a => x >= a.x0 && x <= a.x1 && y >= a.y0 && y <= a.y1)) continue;
+      return { x, y };
+    }
+    return null;
   }
 
   // ------------------------------------------------ grid queries
@@ -276,8 +305,6 @@ export class Game {
   }
   wake(e) {
     if (e.state === 'idle') { e.state = 'chase'; e.cd = 0.5 + rnd() * 0.8; sfx.play('alert'); }
-    else if (e.state === 'dead') return;
-    else if (e.state === 'idle2') e.state = 'chase';
   }
 
   openDoor(idx) {
@@ -411,9 +438,32 @@ export class Game {
       const angTo = Math.atan2(dy, dx);
       e.cd -= dt;
       switch (e.state) {
-        case 'idle':
-          if (dist < 10 && this.los(e.x, e.y, this.px, this.py)) this.wake(e);
+        case 'idle': {
+          // patrol a little around the spawn point instead of standing frozen
+          e.wanderT -= dt;
+          if (e.wanderT <= 0) {
+            e.wanderT = 1.2 + rnd() * 1.8;
+            e.moveA = rnd() * TAU;
+            e.wandering = rnd() < 0.6;
+          }
+          if (e.wandering) {
+            const sp = e.T.speed * 0.35 * dt;
+            const leash = 2.2;
+            const wx = e.x + Math.cos(e.moveA) * sp;
+            const wy = e.y + Math.sin(e.moveA) * sp;
+            if (Math.hypot(wx - e.homeX, e.y - e.homeY) < leash &&
+                !this.blockedForMove(wx, e.y, e.T.radius) && !this.bumpOthers(e, wx, e.y)) e.x = wx;
+            else e.wanderT = 0;
+            if (Math.hypot(e.x - e.homeX, wy - e.homeY) < leash &&
+                !this.blockedForMove(e.x, wy, e.T.radius) && !this.bumpOthers(e, e.x, wy)) e.y = wy;
+            else e.wanderT = 0;
+          }
+          // only triggered by: facing the player up close, or noise() / a
+          // direct hit (both handled via wake() elsewhere)
+          const facing = Math.abs(wrapA(angTo - e.moveA)) < 0.6;
+          if (dist < 5.5 && facing && this.los(e.x, e.y, this.px, this.py)) this.wake(e);
           break;
+        }
         case 'pain':
           e.t -= dt;
           if (e.t <= 0) e.state = 'chase';
@@ -509,7 +559,7 @@ export class Game {
         // pick front/side/back by where the enemy is heading vs where we see it from
         const seen = Math.atan2(this.py - e.y, this.px - e.x);
         const rel = wrapA(e.moveA - seen);
-        const walk = e.state === 'chase';
+        const walk = e.state === 'chase' || (e.state === 'idle' && e.wandering);
         const set = Math.abs(rel) < 0.8 ? art.front
           : Math.abs(rel) > 2.35 ? art.back : art.side;
         if (set === art.side) flip = rel < 0;
