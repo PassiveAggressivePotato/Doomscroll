@@ -178,18 +178,11 @@ export function drawTouchUI(rend, input, cssToInt) {
     circle(rend, kx, ky, 10, hex('#e8c53a'), true);
   }
   if (input.btn) {
-    const [x, y] = cssToInt(input.btn.x, input.btn.y);
+    // slides horizontally with the thumb — that's also the strafe control now
+    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy);
     circle(rend, x, y, 17, hex('#e03a2f'));
     circle(rend, x, y, 16, hex('#7a1710'));
     drawText(rend, '!', x - 1, y - 5, 2, hex('#ffd9d0'), false);
-  }
-  if (input.swipe && Math.abs(input.swipe.dx) > 10) {
-    const dir = input.swipe.dx > 0 ? 1 : -1;
-    const cx = rend.W >> 1, cy = rend.viewH + HUD_H / 2;
-    for (let i = 0; i < 3; i++) {
-      const x = cx + dir * (30 + i * 8);
-      drawText(rend, dir > 0 ? '/' : '/', x, cy - 5, 2, YEL, false);
-    }
   }
 }
 

@@ -461,9 +461,9 @@ export class Game {
     if (this.dead) { this.deadT += dt; this.updateEnemies(dt, false); this.netTick(dt); return; }
 
     // ---- movement
-    const speed = 3.3, strafeSp = 3.0;
+    const speed = 3.3; // strafe now shares this cap — no separate, slower speed
     const mv = input.move * speed * dt;
-    const st = input.strafe * strafeSp * dt;
+    const st = input.strafe * speed * dt;
     this.angle += input.turn * 2.9 * dt;
     const ca = Math.cos(this.angle), sa = Math.sin(this.angle);
     let nx = this.px + ca * mv - sa * st;
@@ -540,9 +540,9 @@ export class Game {
     if (this.won) { this.wonT += dt; this.netTick(dt); return; }
     if (this.dead) { this.deadT += dt; this.netTick(dt); return; }
 
-    const speed = 3.3, strafeSp = 3.0;
+    const speed = 3.3; // strafe now shares this cap — no separate, slower speed
     const mv = input.move * speed * dt;
-    const st = input.strafe * strafeSp * dt;
+    const st = input.strafe * speed * dt;
     this.angle += input.turn * 2.9 * dt;
     const ca = Math.cos(this.angle), sa = Math.sin(this.angle);
     let nx = this.px + ca * mv - sa * st;
