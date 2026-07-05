@@ -45,6 +45,8 @@ function resize() {
     x0: ar.x0 * sx, x1: ar.x1 * sx,
     y0: rend.viewH * sy, y1: ch,
   };
+  const tr = hud.schemeToggleRectInternal(INTERNAL_W);
+  input.schemeRect = { x0: tr.x0 * sx, x1: tr.x1 * sx, y0: tr.y0 * sy, y1: tr.y1 * sy };
 }
 window.addEventListener('resize', resize);
 resize();
@@ -126,6 +128,7 @@ function frame(now) {
     const joinable = net.role === 'join';
     hud.drawTitle(rend, stateT, joinable);
     if (joinable && joinRequested && !net.isPaired()) hud.drawNetStatus(rend, 'CONNECTING...');
+    hud.drawSchemeToggle(rend, input.scheme);
     if (inp.tapped) {
       const [tx, ty] = cssToInt(input.lastX, input.lastY);
       const r = hud.titleBtnRect;
@@ -147,6 +150,7 @@ function frame(now) {
     hud.drawMessages(rend, game);
     hud.drawHud(rend, game);
     hud.drawTouchUI(rend, input, cssToInt);
+    hud.drawSchemeToggle(rend, input.scheme);
     if (game.dead) {
       hud.drawDead(rend, game);
       if (game.deadT > 1.2 && inp.tapped) { newGame(); stateT = 0; }

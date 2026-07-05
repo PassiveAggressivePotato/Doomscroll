@@ -5,6 +5,7 @@ import { FACES, FP } from './sprites.js';
 import { WEAPONS } from './game.js';
 import { loadSet } from './assets.js';
 import * as sfx from './audio.js';
+import { isContactFlat } from './input.js';
 
 export const HUD_H = 52;
 
@@ -173,19 +174,33 @@ export function drawTouchUI(rend, input, cssToInt) {
     const j = input.joy;
     const [x, y] = cssToInt(j.cx, j.cy);
     const [kx, ky] = cssToInt(j.cx + j.dx, j.cy + j.dy);
+    // scheme B: the knob flags up red once this stick has committed to
+    // holding fire, same "armed" language as the other button
+    const firing = input.scheme === 'B' && j.fire;
     circle(rend, x, y, 26, hex('#c9cec2'));
     circle(rend, x, y, 25, hex('#3a3d37'));
-    circle(rend, kx, ky, 10, hex('#e8c53a'), true);
+    circle(rend, kx, ky, 10, firing ? hex('#e03a2f') : hex('#e8c53a'), true);
   }
   if (input.btn) {
-    // slides horizontally with the thumb (strafe) and a little vertically
-    // (push down to safety the gun, grey means it won't fire right now)
-    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy + input.btn.dy);
-    const armed = input.btn.armed;
+    // always slides horizontally with the thumb (strafe). Colour shows
+    // whether this button can fire right now: scheme A reads how flat the
+    // thumb is pressed; scheme B never fires from this side.
+    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy);
+    const armed = input.scheme === 'A' && isContactFlat(input.btn.contact);
     circle(rend, x, y, 17, armed ? hex('#e03a2f') : hex('#6a6d64'));
     circle(rend, x, y, 16, armed ? hex('#7a1710') : hex('#34362f'));
     drawText(rend, '!', x - 1, y - 5, 2, armed ? hex('#ffd9d0') : hex('#c9cec2'), false);
   }
+}
+
+// top-right corner geometry (internal px) for the A/B control-scheme
+// toggle — a small dev/test switch, not part of the normal HUD chrome
+export function schemeToggleRectInternal(W) { return { x0: W - 22, y0: 2, x1: W - 2, y1: 16 }; }
+
+export function drawSchemeToggle(rend, scheme) {
+  const r = schemeToggleRectInternal(rend.W);
+  fillRect(rend, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, hex('#20221e'));
+  drawText(rend, scheme, r.x0 + 6, r.y0 + 3, 1, YEL);
 }
 
 // ---- messages & flashes ------------------------------------------------------
