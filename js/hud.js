@@ -160,7 +160,8 @@ export function drawWeapon(rend, g) {
   // recoil: a sharp kick up on firing, easing back down to rest
   const recoilY = -g.recoil * WEAPONS[g.weapon].kick;
   const recoilX = (g.weapon === 1 ? -g.recoil * 4 : 0); // shotgun also snaps slightly aside
-  let y = rend.viewH - pix.h * s + 10 + bobY + recoilY + g.switching * 90;
+  const dropY = g.weapon === 1 ? 22 : 10; // shotgun sits further down behind the status bar
+  let y = rend.viewH - pix.h * s + dropY + bobY + recoilY + g.switching * 90;
   rend.blit(pix, (rend.W - pix.w * s) / 2 + bobX + recoilX, y, s);
 }
 

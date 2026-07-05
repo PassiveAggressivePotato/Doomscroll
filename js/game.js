@@ -9,7 +9,7 @@ const wrapA = a => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI;
 
 export const WEAPONS = [
   { name: 'PISTOL', ammo: 'bullets', rate: 0.42, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.012, kick: 10 },
-  { name: 'SHOTGUN', ammo: 'shells', rate: 1.0, pellets: 7, dmg: () => 4 + rnd() * 6, spread: 0.075, kick: 26 },
+  { name: 'SHOTGUN', ammo: 'shells', rate: 1.0, pellets: 7, dmg: () => 4 + rnd() * 6, spread: 0.075, kick: 13 },
   { name: 'CHAINGUN', ammo: 'bullets', rate: 0.135, pellets: 1, dmg: () => 6 + rnd() * 8, spread: 0.035, kick: 8 },
 ];
 
