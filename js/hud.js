@@ -5,7 +5,6 @@ import { FACES, FP } from './sprites.js';
 import { WEAPONS } from './game.js';
 import { loadSet } from './assets.js';
 import * as sfx from './audio.js';
-import { isContactFlat } from './input.js';
 
 export const HUD_H = 52;
 
@@ -169,48 +168,62 @@ export function drawWeapon(rend, g) {
 }
 
 // ---- touch overlays ---------------------------------------------------------
-export function drawTouchUI(rend, input, cssToInt) {
-  if (input.joy) {
-    const j = input.joy;
-    const [x, y] = cssToInt(j.cx, j.cy);
-    const [kx, ky] = cssToInt(j.cx + j.dx, j.cy + j.dy);
-    // scheme B: the knob flags up red once this stick has committed to
-    // holding fire, same "armed" language as the other button
-    const firing = input.scheme === 'B' && j.fire;
-    circle(rend, x, y, 26, hex('#c9cec2'));
-    circle(rend, x, y, 25, hex('#3a3d37'));
-    circle(rend, kx, ky, 10, firing ? hex('#e03a2f') : hex('#e8c53a'), true);
-  }
-  if (input.btn) {
-    // always slides horizontally with the thumb (strafe). Colour shows
-    // whether this button can fire right now: scheme A reads how flat the
-    // thumb is pressed; scheme B never fires from this side.
-    const [x, y] = cssToInt(input.btn.cx + input.btn.dx, input.btn.cy);
-    const armed = input.scheme === 'A' && isContactFlat(input.btn.contact);
-    circle(rend, x, y, 17, armed ? hex('#e03a2f') : hex('#6a6d64'));
-    circle(rend, x, y, 16, armed ? hex('#7a1710') : hex('#34362f'));
-    drawText(rend, '!', x - 1, y - 5, 2, armed ? hex('#ffd9d0') : hex('#c9cec2'), false);
-  }
+function drawStick(rend, cssToInt, j) {
+  const [x, y] = cssToInt(j.cx, j.cy);
+  const [kx, ky] = cssToInt(j.cx + j.dx, j.cy + j.dy);
+  circle(rend, x, y, 26, hex('#c9cec2'));
+  circle(rend, x, y, 25, hex('#3a3d37'));
+  circle(rend, kx, ky, 10, hex('#e8c53a'), true);
 }
 
-// top-right corner geometry (internal px) for the A/B control-scheme
-// toggle — a small dev/test switch, not part of the normal HUD chrome
-export function schemeToggleRectInternal(W) { return { x0: W - 22, y0: 2, x1: W - 2, y1: 16 }; }
+export function drawTouchUI(rend, input, cssToInt) {
+  if (input.joyL) drawStick(rend, cssToInt, input.joyL);
+  if (input.joyR) drawStick(rend, cssToInt, input.joyR);
+}
 
-export function drawSchemeToggle(rend, scheme) {
+// top-right corner geometry (internal px) for the TILT/BLOW fire-scheme
+// toggle — a small dev/test switch, not part of the normal HUD chrome
+export function schemeToggleRectInternal(W) { return { x0: W - 30, y0: 2, x1: W - 2, y1: 16 }; }
+
+export function drawSchemeToggle(rend, fireScheme) {
   const r = schemeToggleRectInternal(rend.W);
   fillRect(rend, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, hex('#20221e'));
-  drawText(rend, scheme, r.x0 + 6, r.y0 + 3, 1, YEL);
+  drawText(rend, fireScheme, r.x0 + 2, r.y0 + 3, 1, YEL);
+}
+
+// bottom-left corner geometry (internal px) for the tilt re-zero button
+export function zeroRectInternal(H) { return { x0: 2, y0: H - 14, x1: 22, y1: H - 2 }; }
+
+export function drawZeroButton(rend) {
+  const r = zeroRectInternal(rend.H);
+  fillRect(rend, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, hex('#20221e'));
+  drawText(rend, '0', r.x0 + 6, r.y0 + 3, 1, BLU);
+}
+
+// The crosshair doubles as a fire-charge meter: a ring of pips fills in
+// (tilt angle or mic-blow level, whichever scheme is active) around the
+// still-usable centre dot, flashing red once it's full — which is also
+// the instant it fires.
+export function drawCrosshairMeter(rend, input) {
+  const cx = rend.W >> 1, cy = rend.viewH >> 1;
+  setPx(rend, cx, cy, hex('#d8dcd0'));
+  setPx(rend, cx - 1, cy, hex('#20221e'));
+  setPx(rend, cx + 1, cy, hex('#20221e'));
+  const N = 8, R = 6;
+  const lit = Math.round((input.fireLevel || 0) * N);
+  const col = input.fireTriggered ? hex('#e03a2f') : YEL;
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + Math.round(Math.cos(t) * R), y = cy + Math.round(Math.sin(t) * R);
+    setPx(rend, x, y, i < lit ? col : hex('#4a4d46'));
+  }
 }
 
 // ---- messages & flashes ------------------------------------------------------
 export function drawMessages(rend, g) {
   if (g.msgT > 0 && g.msg) drawText(rend, g.msg, 4, 4, 1, GRY);
   drawText(rend, g.levelName, 4, rend.viewH - 8, 1, hex('#8a8e83'));
-  // crosshair
-  setPx(rend, rend.W >> 1, rend.viewH >> 1, hex('#d8dcd0'));
-  setPx(rend, (rend.W >> 1) - 1, rend.viewH >> 1, hex('#20221e'));
-  setPx(rend, (rend.W >> 1) + 1, rend.viewH >> 1, hex('#20221e'));
+  // crosshair is drawn separately by drawCrosshairMeter (it needs `input`)
   if (g.flashR > 0) rend.tint(0, 0, rend.W, rend.viewH, 200, 20, 10, Math.min(0.5, g.flashR));
   if (g.flashY > 0) rend.tint(0, 0, rend.W, rend.viewH, 220, 190, 60, Math.min(0.3, g.flashY));
 }

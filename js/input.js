@@ -1,57 +1,59 @@
-// input.js — floating touch controls, with two experimental schemes for
-// combining strafe with firing on the left/right thumbs. Tap the small
-// A/B button in the top-right corner to flip between them for testing —
-// it's remembered across reloads.
-//
-//  Scheme A: left thumb always strafes (slide it sideways, same as
-//    before). Press flatter — more of the thumb touching the screen —
-//    to also fire; just the tip touching strafes without firing. (Needs
-//    a device that reports real touch-contact size; falls back to
-//    "always fires while held" if it can't tell.) Right thumb is a plain
-//    move/turn stick.
-//  Scheme B: left thumb strafes only, never fires. Right thumb fires if
-//    you tap it or hold it in place, but not if your first move off it
-//    is a swipe — and once it's firing you can still drag it to move
-//    normally, same as the plain stick.
+// input.js — floating touch controls, controller-style:
+//  • Left thumb, anywhere on the left: a stick for movement — forward/back
+//    and strafe left/right (no turning).
+//  • Right thumb, anywhere on the right: a stick for turning left/right
+//    only (there's no look up/down in this engine).
+// Firing is off the sticks entirely, driven by one of two experimental
+// senses you can flip between with the small button in the top-right
+// corner (remembered across reloads):
+//  • TILT: tip the device to fill the ring around the crosshair; it
+//    fires the moment the ring is full, and keeps firing while held
+//    there. The bottom-left button re-zeroes the tilt to however you're
+//    currently holding the phone, in case it drifts.
+//  • BLOW: blow into the mic; same full-ring-fires behaviour, driven by
+//    low-frequency mic energy instead of tilt angle.
+// Both need a real device to tune properly — tilt direction/degrees and
+// the blow threshold are best guesses that likely need adjusting once
+// tried for real.
 //
 // Status bar: quick-tap the ARMS numbers to switch weapons; quick-tap
 // anywhere else on it to push open whatever door (or the exit switch) is
-// directly ahead — it doesn't fire a shot. Keyboard (WASD/arrows, space,
-// 1-3, F to push) always works on desktop, independent of scheme.
+// directly ahead. Keyboard (WASD/arrows, space, 1-3, F to push) always
+// works on desktop, independent of any of the above.
 import { unlock } from './audio.js';
 
-const SCHEME_KEY = 'doomscroll_ctrlScheme';
-// How flat a touch has to be (CSS px of contact width/height) to count as
-// "whole pad" rather than "just the tip" in scheme A. Devices/browsers
-// that don't report real contact geometry report ~1 for every touch, in
-// which case this always reads as a flat press (i.e. always fires) —
-// there's no way to distinguish tip-vs-pad without that hardware support.
-export const FLAT_PRESS_PX = 30;
-// Scheme B: how long a still touch has to be held, and how far it can
-// drift, before it commits to "holding to fire" instead of "tapping".
-const HOLD_MS = 140, SWIPE_PX = 14;
-
-const contactSize = e => Math.max(e.width || 1, e.height || 1);
+const FIRE_SCHEME_KEY = 'doomscroll_fireScheme';
+const MAX_TILT_DEG = 35;   // device-tilt degrees (from zero) that fills the ring
+const BLOW_THRESHOLD = 150; // avg low-band mic energy (0-255) that fills the ring
 
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
-    this.scheme = localStorage.getItem(SCHEME_KEY) === 'B' ? 'B' : 'A';
+    this.fireScheme = localStorage.getItem(FIRE_SCHEME_KEY) === 'blow' ? 'blow' : 'tilt';
     this.move = 0; this.turn = 0; this.strafe = 0; this.fire = false; this.use = false;
+    this.fireLevel = 0;      // 0-1, for the crosshair-ring HUD
+    this.fireTriggered = false;
     this.select = null;
-    this.joy = null;      // {id, cx, cy, dx, dy, t0, committed, fire} — committed only used in scheme B
-    this.btn = null;      // {id, cx, cy, dx, contact} — dx drives strafe always
-    this.bar = null;      // {id, x0, y0, t0} — status-bar tap tracking (push / weapon select)
-    this.barUse = false;  // one-shot: a quick tap on the status bar just pushed something
-    this.keyUse = false;  // one-shot: desktop 'F' key just pushed something
-    this.joyTapFire = false; // one-shot: scheme B, released the stick before it committed either way
-    this.tapped = false;  // any tap this frame (title/restart screens)
+    this.joyL = null;      // {id, cx, cy, dx, dy} — move + strafe
+    this.joyR = null;      // {id, cx, cy, dx, dy} — turn only (dy unused)
+    this.bar = null;       // {id, x0, y0, t0} — status-bar tap tracking (push / weapon select)
+    this.barUse = false;   // one-shot: a quick tap on the status bar just pushed something
+    this.keyUse = false;   // one-shot: desktop 'F' key just pushed something
+    this.tapped = false;   // any tap this frame (title/restart screens)
     this.lastX = 0; this.lastY = 0; // raw CSS px of the most recent tap
     this.keys = new Set();
-    this.hudTop = 9999;    // CSS px; set by layout()
-    this.armsRect = null;  // {x0,y0,x1,y1} CSS px
+    this.hudTop = 9999;     // CSS px; set by layout()
+    this.armsRect = null;   // {x0,y0,x1,y1} CSS px
     this.armsCols = 3;
-    this.schemeRect = null; // {x0,y0,x1,y1} CSS px — top-right A/B toggle
+    this.schemeRect = null; // {x0,y0,x1,y1} CSS px — top-right TILT/BLOW toggle
+    this.zeroRect = null;   // {x0,y0,x1,y1} CSS px — bottom-left tilt re-zero
+
+    this._sensorsRequested = false;
+    this._rawBeta = null;
+    this.tiltZero = null;
+    this._wasTriggered = false;
+    this._micAnalyser = null;
+    this._micData = null;
 
     const opts = { passive: false };
     canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -71,25 +73,76 @@ export class Input {
     window.addEventListener('keyup', e => this.keys.delete(e.code));
   }
 
-  toggleScheme() {
-    this.scheme = this.scheme === 'A' ? 'B' : 'A';
-    localStorage.setItem(SCHEME_KEY, this.scheme);
+  toggleFireScheme() {
+    this.fireScheme = this.fireScheme === 'tilt' ? 'blow' : 'tilt';
+    localStorage.setItem(FIRE_SCHEME_KEY, this.fireScheme);
+  }
+
+  zeroTilt() {
+    if (this._rawBeta !== null) this.tiltZero = this._rawBeta;
+  }
+
+  // Lazily asks for whatever sensor access either fire scheme needs, the
+  // first time the player actually touches the screen (a real user
+  // gesture, required by iOS for motion access and by all browsers for
+  // the mic). Both are requested up front so switching schemes later
+  // doesn't need a fresh prompt.
+  requestSensors() {
+    if (this._sensorsRequested) return;
+    this._sensorsRequested = true;
+    const listen = () => window.addEventListener('deviceorientation', e => this._onOrientation(e));
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission().then(state => { if (state === 'granted') listen(); }).catch(() => {});
+    } else if (typeof DeviceOrientationEvent !== 'undefined') {
+      listen();
+    }
+    navigator.mediaDevices?.getUserMedia?.({ audio: true }).then(stream => {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      this._micAnalyser = analyser;
+      this._micData = new Uint8Array(analyser.frequencyBinCount);
+    }).catch(() => {}); // no mic / denied — blow scheme just won't fire
+  }
+
+  _onOrientation(e) {
+    this._rawBeta = e.beta ?? 0;
+    if (this.tiltZero === null) this.tiltZero = this._rawBeta; // auto-zero on first reading
+  }
+
+  get tiltLevel() {
+    if (this._rawBeta === null || this.tiltZero === null) return 0;
+    return Math.max(0, Math.min(1, (this._rawBeta - this.tiltZero) / MAX_TILT_DEG));
+  }
+
+  get blowLevel() {
+    if (!this._micAnalyser) return 0;
+    this._micAnalyser.getByteFrequencyData(this._micData);
+    // blowing concentrates energy in the low end of the spectrum — average
+    // roughly the bottom eighth of the frequency bins
+    const n = Math.max(1, this._micData.length >> 3);
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += this._micData[i];
+    return Math.max(0, Math.min(1, (sum / n) / BLOW_THRESHOLD));
   }
 
   down(e) {
     e.preventDefault();
     unlock();
+    this.requestSensors();
     this.canvas.setPointerCapture?.(e.pointerId);
     const x = e.clientX, y = e.clientY;
 
-    // the A/B toggle is a dev/test control, not part of play — handle it
-    // before anything else so it can't also count as a title/restart tap
-    // or start a joystick/fire touch underneath it
+    // the corner buttons are dev/test controls, not part of play — handle
+    // them before anything else so they can't also count as a title/
+    // restart tap or start a stick touch underneath them
     const sr = this.schemeRect;
-    if (sr && x >= sr.x0 && x <= sr.x1 && y >= sr.y0 && y <= sr.y1) {
-      this.toggleScheme();
-      return;
-    }
+    if (sr && x >= sr.x0 && x <= sr.x1 && y >= sr.y0 && y <= sr.y1) { this.toggleFireScheme(); return; }
+    const zr = this.zeroRect;
+    if (zr && x >= zr.x0 && x <= zr.x1 && y >= zr.y0 && y <= zr.y1) { this.zeroTilt(); return; }
+
     this.tapped = true;
     this.lastX = x; this.lastY = y; // raw tap position, for hit-testing UI buttons (e.g. the title screen)
     if (y >= this.hudTop) {
@@ -97,44 +150,26 @@ export class Input {
       return;
     }
     if (x >= window.innerWidth / 2) {
-      if (!this.joy) {
-        this.joy = {
-          id: e.pointerId, cx: x, cy: y, dx: 0, dy: 0, t0: performance.now(),
-          committed: this.scheme === 'B' ? null : 'move', // scheme A: right stick never fires
-          fire: false,
-        };
-      }
+      if (!this.joyR) this.joyR = { id: e.pointerId, cx: x, cy: y, dx: 0, dy: 0 };
     } else {
-      if (!this.btn) this.btn = { id: e.pointerId, cx: x, cy: y, dx: 0, contact: contactSize(e) };
+      if (!this.joyL) this.joyL = { id: e.pointerId, cx: x, cy: y, dx: 0, dy: 0 };
     }
   }
 
   movePtr(e) {
-    if (this.joy && e.pointerId === this.joy.id) {
-      const R = 52;
-      let dx = e.clientX - this.joy.cx, dy = e.clientY - this.joy.cy;
+    const R = 52;
+    for (const j of [this.joyL, this.joyR]) {
+      if (!j || e.pointerId !== j.id) continue;
+      let dx = e.clientX - j.cx, dy = e.clientY - j.cy;
       const d = Math.hypot(dx, dy);
       if (d > R) { dx *= R / d; dy *= R / d; }
-      this.joy.dx = dx; this.joy.dy = dy;
-      if (this.joy.committed === null) {
-        if (d > SWIPE_PX) this.joy.committed = 'move';
-        else if (performance.now() - this.joy.t0 > HOLD_MS) { this.joy.committed = 'hold'; this.joy.fire = true; }
-      }
-    }
-    if (this.btn && e.pointerId === this.btn.id) {
-      const R = 46;
-      this.btn.dx = Math.max(-R, Math.min(R, e.clientX - this.btn.cx));
-      this.btn.contact = contactSize(e);
+      j.dx = dx; j.dy = dy;
     }
   }
 
   up(e) {
-    if (this.joy && e.pointerId === this.joy.id) {
-      // released before it swiped or held long enough to commit — a tap fires once
-      if (this.joy.committed === null) this.joyTapFire = true;
-      this.joy = null;
-    }
-    if (this.btn && e.pointerId === this.btn.id) this.btn = null;
+    if (this.joyL && e.pointerId === this.joyL.id) this.joyL = null;
+    if (this.joyR && e.pointerId === this.joyR.id) this.joyR = null;
     if (this.bar && e.pointerId === this.bar.id) {
       const s = this.bar;
       const quick = performance.now() - s.t0 < 350 &&
@@ -163,27 +198,23 @@ export class Input {
     if (k.has('KeyQ')) strafe -= 1;
     if (k.has('KeyE')) strafe += 1;
     let fire = k.has('Space') || k.has('ControlLeft') || k.has('ControlRight');
-    if (this.joy) {
-      move += -this.joy.dy / 46;
-      turn += this.joy.dx / 46;
-      if (this.scheme === 'B') {
-        // a perfectly still hold produces no pointermove events, so also
-        // check the hold-commit timer here every frame
-        if (this.joy.committed === null && performance.now() - this.joy.t0 > HOLD_MS) {
-          this.joy.committed = 'hold'; this.joy.fire = true;
-        }
-        if (this.joy.fire) fire = true;
-      }
+
+    if (this.joyL) {
+      move += -this.joyL.dy / 46;
+      strafe += this.joyL.dx / 46;
     }
-    if (this.joyTapFire) { fire = true; this.joyTapFire = false; }
-    if (this.btn) {
-      // scheme A: flatten your thumb (bigger contact patch) to fire;
-      // scheme B: this button is strafe-only and never fires
-      if (this.scheme === 'A' && contactIsFlat(this.btn.contact)) fire = true;
-      // direct positional mapping (no smoothing/momentum) — sliding back
-      // past centre snaps straight to the opposite strafe direction
-      strafe += this.btn.dx / 46;
+    if (this.joyR) {
+      turn += this.joyR.dx / 46; // no look up/down, so dy is unused
     }
+
+    const level = this.fireScheme === 'blow' ? this.blowLevel : this.tiltLevel;
+    const triggered = level >= 1;
+    if (triggered && !this._wasTriggered) navigator.vibrate?.(40);
+    this._wasTriggered = triggered;
+    this.fireLevel = level;
+    this.fireTriggered = triggered;
+    if (triggered) fire = true;
+
     const use = this.barUse || this.keyUse;
     this.move = Math.max(-1, Math.min(1, move));
     this.turn = Math.max(-1, Math.min(1, turn));
@@ -200,8 +231,3 @@ export class Input {
     return out;
   }
 }
-
-function contactIsFlat(size) {
-  return size <= 1 || size >= FLAT_PRESS_PX; // no contact-size support -> always fire
-}
-export const isContactFlat = contactIsFlat;

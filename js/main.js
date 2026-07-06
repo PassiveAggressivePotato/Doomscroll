@@ -47,6 +47,8 @@ function resize() {
   };
   const tr = hud.schemeToggleRectInternal(INTERNAL_W);
   input.schemeRect = { x0: tr.x0 * sx, x1: tr.x1 * sx, y0: tr.y0 * sy, y1: tr.y1 * sy };
+  const zr = hud.zeroRectInternal(rend.H);
+  input.zeroRect = { x0: zr.x0 * sx, x1: zr.x1 * sx, y0: zr.y0 * sy, y1: zr.y1 * sy };
 }
 window.addEventListener('resize', resize);
 resize();
@@ -128,7 +130,8 @@ function frame(now) {
     const joinable = net.role === 'join';
     hud.drawTitle(rend, stateT, joinable);
     if (joinable && joinRequested && !net.isPaired()) hud.drawNetStatus(rend, 'CONNECTING...');
-    hud.drawSchemeToggle(rend, input.scheme);
+    hud.drawSchemeToggle(rend, input.fireScheme);
+    hud.drawZeroButton(rend);
     if (inp.tapped) {
       const [tx, ty] = cssToInt(input.lastX, input.lastY);
       const r = hud.titleBtnRect;
@@ -148,9 +151,11 @@ function frame(now) {
     rend.render(game);
     if (!game.dead) hud.drawWeapon(rend, game);
     hud.drawMessages(rend, game);
+    if (!game.dead) hud.drawCrosshairMeter(rend, input);
     hud.drawHud(rend, game);
     hud.drawTouchUI(rend, input, cssToInt);
-    hud.drawSchemeToggle(rend, input.scheme);
+    hud.drawSchemeToggle(rend, input.fireScheme);
+    hud.drawZeroButton(rend);
     if (game.dead) {
       hud.drawDead(rend, game);
       if (game.deadT > 1.2 && inp.tapped) { newGame(); stateT = 0; }
