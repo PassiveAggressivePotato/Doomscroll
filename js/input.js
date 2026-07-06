@@ -23,7 +23,7 @@
 import { unlock } from './audio.js';
 
 const FIRE_SCHEME_KEY = 'doomscroll_fireScheme';
-const MAX_TILT_DEG = 35;   // device-tilt degrees (from zero) that fills the ring
+const MAX_TILT_DEG = 23;   // device-tilt degrees (from zero) that fills the ring
 const BLOW_THRESHOLD = 150; // avg low-band mic energy (0-255) that fills the ring
 
 export class Input {
@@ -114,7 +114,7 @@ export class Input {
 
   get tiltLevel() {
     if (this._rawBeta === null || this.tiltZero === null) return 0;
-    return Math.max(0, Math.min(1, (this._rawBeta - this.tiltZero) / MAX_TILT_DEG));
+    return Math.max(0, Math.min(1, (this.tiltZero - this._rawBeta) / MAX_TILT_DEG));
   }
 
   get blowLevel() {
